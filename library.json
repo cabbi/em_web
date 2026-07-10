@@ -1,0 +1,20 @@
+{
+  "name": "EmWeb",
+  "version": "1.0.0",
+  "description": "An tiny ESP32 IDF based web library",
+  "keywords": "",
+  "repository":  {
+    "type": "git",
+    "url": "https://github.com/cabbi/em_web.git"
+  },
+  "authors":  {
+    "name": "Fabio Cabella",
+    "maintainer": true
+  },
+  "dependencies": {
+    "cabbi/EmCore": ">=2.1.0"
+  },
+  "license": "BSD-3-Clause",
+  "frameworks": ["arduino"],
+  "platforms": "*"
+}

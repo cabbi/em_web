@@ -1,12 +1,13 @@
 #ifndef __EM_WIFI_H__
 #define __EM_WIFI_H__
 
-#include <WiFi.h>
 #include <atomic>
 #include <vector>
 
-#include "em_log.h"
+#include "esp_wifi.h"
+
 #include "em_string.h"
+#include "em_duration.h"
 #include "em_threading.h"
 
 
@@ -67,12 +68,12 @@ struct EmWiFiCredential {
 // connecting to the best available network from a pool of credentials.
 class EmWiFi {
 public:
-    EmWiFi()
-     : m_taskHandle(nullptr),
-       m_checkIntervalSec(0) {}
-    
+    EmWiFi();   
     ~EmWiFi() { stop(); }
-    
+
+    EmWiFi(const EmWiFi&) = delete;
+    EmWiFi& operator=(const EmWiFi&) = delete;
+
     // Add a new network configuration to the AP list.
     // Max 128 APs
     bool addAP(const char* ssid, const char* passphrase);
@@ -93,14 +94,24 @@ public:
     // not connected or the level is equal or below the 'minCheckLevel'.  
     bool start(uint16_t checkIntervalSec = 60,
                EmWiFiLevel minCheckLevel = EmWiFiLevel::fair);
+    
+    // Stops the WiFi connection check loop
     void stop();
+
+    // Connects to an Access Point
+    void connect(const char* ssid, 
+                 const char* password, 
+                 EmDuration waitTime = EmDuration(3000));
+    
+    // Disconnects from current Access Point 
+    void disconnect();
 
     bool isRunning() const {
         return m_taskHandle != nullptr;
     }
 
     static bool isConnected() {
-        return WiFi.isConnected();
+        return m_connected;
     }
 
     static bool isNotConnected() {
@@ -108,7 +119,7 @@ public:
     }
 
     const char* getSsid(EmStringS& ssid) const {
-        ssid.set(WiFi.SSID().c_str());
+        getCurrentSsid_(ssid);
         return ssid.c_str();
     }   
 
@@ -116,7 +127,11 @@ public:
         if (!EmWiFi::isConnected()) {
             return 0;
         }
-        return WiFi.RSSI();
+        wifi_ap_record_t ap_info;
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+            return ap_info.rssi;
+        }
+        return 0;
     }
 
     EmWiFiLevel getWiFiLevel() const {
@@ -133,11 +148,6 @@ public:
         return ::getWiFiLevelName(getWiFiLevel());
     }
     
-    void disconnect() {
-        WiFi.disconnect();
-        clearCurrentSsid_();
-    }
-
 private:
     bool getBestNetwork_(EmWiFiCredential& bestNetwork);
     void clearCurrentSsid_() {
@@ -148,18 +158,26 @@ private:
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.set(ssid);
     }
+    void getCurrentSsid_(EmStringS& ssid) const {
+        EmMutexLock lock(m_networkMutex);
+        ssid.set(m_currentSsid);
+    }
     bool isCurrentSsid_(const EmStringS& ssid) const {
         EmMutexLock lock(m_networkMutex);
         return m_currentSsid == ssid;
     }
+
+    static void eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void wifiTaskCore_(void* pvParameters); // FreeRTOS task function
 
+    esp_netif_t* m_netif;
     EmStringS m_currentSsid;
     mutable EmMutex m_networkMutex;
     std::vector<EmWiFiCredential> m_networks;
     std::atomic<TaskHandle_t> m_taskHandle;
     std::atomic<uint16_t> m_checkIntervalSec;
     std::atomic<EmWiFiLevel> m_checkLevel;
+    inline static std::atomic<bool> m_connected = false;
 };
 
 #endif

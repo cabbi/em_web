@@ -16,6 +16,7 @@
 using EmEpochTypeSec = uint32_t;
 using EmEpochTypeMilli = uint64_t;
 
+// TODO: set a callback to EmWiFi in order t initialize time on WiFi connection event!
 
 // EmTime class for handling time-related operations.
 // Class has only static methods since it cannot have multiple instances.

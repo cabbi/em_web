@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <vector>
+#include <algorithm>
 
 #include "esp_wifi.h"
 
@@ -60,53 +61,93 @@ struct EmWiFiCredential {
         return *this;
     }
 
+    bool isEmpty() const {
+        return ssid.isEmpty();
+    }
+
     EmStringS ssid;
     EmStringS password;
+};
+
+
+// WiFi event types
+enum class EmWiFiEventType: uint8_t {
+    connected = 0,
+    disconnected = 1
+};
+
+// WiFi event callback result
+enum class EmWiFiEventResult: uint8_t {
+    none = 0,
+    removeHandler = 1
+};
+
+// WiFi event callback prototype
+typedef EmWiFiEventResult (*EmWiFiEventCallback)(void* userArg, EmWiFiEventType type);
+
+// WiFi event data                                    
+struct EmWiFiEventHandler {
+    EmWiFiEventHandler(EmWiFiEventCallback callback, void* userArg)
+     : callback(callback), userArg(userArg) {}
+
+    EmWiFiEventCallback callback;
+    void* userArg;       
 };
 
 // This class manages Wi-Fi connections and orchestrates scanning and  
 // connecting to the best available network from a pool of credentials.
 class EmWiFi {
 public:
-    EmWiFi();   
-    ~EmWiFi() { stop(); }
-
-    EmWiFi(const EmWiFi&) = delete;
-    EmWiFi& operator=(const EmWiFi&) = delete;
+    static void init();
 
     // Add a new network configuration to the AP list.
     // Max 128 APs
-    bool addAP(const char* ssid, const char* passphrase);
+    static bool addAP(const char* ssid, const char* passphrase);
     
-    void resetApPool() {
+    // Resets the defined APs
+    static void resetApPool() {
         EmMutexLock lock(m_networkMutex);
         m_networks.clear();
         m_currentSsid.clear();
     }
     
-    int8_t getApCount() const {
+    // Returns the number of defined APs
+    static int8_t getApCount() {
         // No need to block this networks read operation
         return static_cast<int8_t>(m_networks.size());
+    }
+
+    // Add a new event handler to the WiFi object.
+    // NOTE: keep the event handler callback execution fast, since it blocks other event handlers!
+    static void addEventHandler(EmWiFiEventHandler handler) {
+        EmMutexLock lock(m_eventsMutex);
+        m_eventHandlers.push_back(handler);
+    }
+
+    // Clears the event handlers pool
+    static void clearEventHandlers(EmWiFiEventHandler handler) {
+        EmMutexLock lock(m_eventsMutex);
+        m_eventHandlers.clear();
     }
 
     // Start the WiFi connection check loop.
     // The loop will check each 'checkIntervalSec' if WiFi is 
     // not connected or the level is equal or below the 'minCheckLevel'.  
-    bool start(uint16_t checkIntervalSec = 60,
-               EmWiFiLevel minCheckLevel = EmWiFiLevel::fair);
+    static bool startConnectionLoop(uint16_t checkIntervalSec = 60,
+                                    EmWiFiLevel minCheckLevel = EmWiFiLevel::fair);
     
     // Stops the WiFi connection check loop
-    void stop();
+    static void stopConnectionLoop();
 
     // Connects to an Access Point
-    void connect(const char* ssid, 
-                 const char* password, 
-                 EmDuration waitTime = EmDuration(3000));
+    static void connect(const char* ssid, 
+                        const char* password, 
+                        EmDuration waitTime = EmDuration(3000));
     
     // Disconnects from current Access Point 
-    void disconnect();
+    static void disconnect();
 
-    bool isRunning() const {
+    static bool isConnectionLoopRunning() {
         return m_taskHandle != nullptr;
     }
 
@@ -118,12 +159,12 @@ public:
         return !EmWiFi::isConnected();
     }
 
-    const char* getSsid(EmStringS& ssid) const {
+    static const char* getSsid(EmStringS& ssid) {
         getCurrentSsid_(ssid);
         return ssid.c_str();
     }   
 
-    int8_t getRssi() const {
+    static int8_t getRssi() {
         if (!EmWiFi::isConnected()) {
             return 0;
         }
@@ -134,14 +175,14 @@ public:
         return 0;
     }
 
-    EmWiFiLevel getWiFiLevel() const {
+    static EmWiFiLevel getWiFiLevel() {
         if (!EmWiFi::isConnected()) {
             return EmWiFiLevel::notConnected;
         }
         return ::getWiFiLevel(getRssi());
     }
 
-    const char* getWiFiLevelName() const {
+    static const char* getWiFiLevelName() {
         if (!EmWiFi::isConnected()) {
             return "Not connected";
         }
@@ -149,34 +190,54 @@ public:
     }
     
 private:
-    bool getBestNetwork_(EmWiFiCredential& bestNetwork);
-    void clearCurrentSsid_() {
+    EmWiFi();   
+
+    static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
+    static void clearCurrentSsid_() {
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.clear();
     }
-    void setCurrentSsid_(const EmStringS& ssid) {
+    static void setCurrentSsid_(const EmStringS& ssid) {
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.set(ssid);
     }
-    void getCurrentSsid_(EmStringS& ssid) const {
+    static void getCurrentSsid_(EmStringS& ssid) {
         EmMutexLock lock(m_networkMutex);
         ssid.set(m_currentSsid);
     }
-    bool isCurrentSsid_(const EmStringS& ssid) const {
+    static bool isCurrentSsid_(const EmStringS& ssid) {
         EmMutexLock lock(m_networkMutex);
         return m_currentSsid == ssid;
     }
 
-    static void eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
-    static void wifiTaskCore_(void* pvParameters); // FreeRTOS task function
+    static void raiseEvent_(EmWiFiEventType type) {
+        EmMutexLock lock(m_eventsMutex);
+        m_eventHandlers.erase(
+            std::remove_if(m_eventHandlers.begin(), 
+                           m_eventHandlers.end(), 
+                           [type](EmWiFiEventHandler handler) {
+                return handler.callback(handler.userArg, type) == EmWiFiEventResult::removeHandler;
+            }), 
+            m_eventHandlers.end()
+        );        
+    }
 
-    esp_netif_t* m_netif;
-    EmStringS m_currentSsid;
-    mutable EmMutex m_networkMutex;
-    std::vector<EmWiFiCredential> m_networks;
-    std::atomic<TaskHandle_t> m_taskHandle;
-    std::atomic<uint16_t> m_checkIntervalSec;
-    std::atomic<EmWiFiLevel> m_checkLevel;
+    static void eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
+    static void wifiTaskCore_(void* pvParameters);
+
+    inline static EmMutex m_initMutex;
+    inline static esp_netif_t* m_netif = nullptr;
+    inline static EmStringS m_currentSsid;
+
+    inline static EmMutex m_networkMutex;
+    inline static std::vector<EmWiFiCredential> m_networks;
+
+    inline static EmMutex m_eventsMutex;
+    inline static std::vector<EmWiFiEventHandler> m_eventHandlers;
+    inline static std::atomic<TaskHandle_t> m_taskHandle = nullptr;
+
+    inline static std::atomic<uint16_t> m_checkIntervalSec = 0;
+    inline static std::atomic<EmWiFiLevel> m_checkLevel = EmWiFiLevel::notConnected;
     inline static std::atomic<bool> m_connected = false;
 };
 

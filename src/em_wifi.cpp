@@ -4,11 +4,17 @@
 #include "em_net.h"
 #include "em_timeout.h"
 
-EmWiFi::EmWiFi()
- : m_taskHandle(nullptr),
-   m_checkIntervalSec(0) {
+void EmWiFi::init() {
+    EmMutexLock lock(m_initMutex);
+    if (m_netif != nullptr) {
+        // already initialized!
+        return;
+    }
+
     // Initialize the Idf underlying TCP/IP stack
     EmNet::init();
+    
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // Configure and start the Idf WiFi handling
     m_netif = esp_netif_create_default_wifi_sta();
@@ -18,15 +24,13 @@ EmWiFi::EmWiFi()
     esp_event_handler_instance_register(WIFI_EVENT,
                                         ESP_EVENT_ANY_ID,
                                         &EmWiFi::eventHandler_,
-                                        this,
+                                        nullptr,
                                         nullptr);
     esp_event_handler_instance_register(IP_EVENT,
                                         IP_EVENT_STA_GOT_IP,
                                         &EmWiFi::eventHandler_,
-                                        this,
+                                        nullptr,
                                         nullptr);
-
-
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_start();
 }
@@ -39,7 +43,10 @@ bool EmWiFi::addAP(const char* ssid, const char* passphrase) {
     return false;
 }
 
-bool EmWiFi::start(uint16_t checkIntervalSec, EmWiFiLevel checkLevel) {
+bool EmWiFi::startConnectionLoop(uint16_t checkIntervalSec, EmWiFiLevel checkLevel) {
+    // In case not initialized!
+    init();
+
     m_checkIntervalSec = checkIntervalSec > 0 ? checkIntervalSec : 1;
     m_checkLevel = checkLevel;
     
@@ -47,13 +54,13 @@ bool EmWiFi::start(uint16_t checkIntervalSec, EmWiFiLevel checkLevel) {
         // Creates a background task running on Core 0 to leave Core 1 free for your loop()
         TaskHandle_t taskHandle;
         xTaskCreatePinnedToCore(
-            this->wifiTaskCore_,   // Function to execute
-            "EmWiFi_task",        // Name of task
-            4096,                 // Stack size in words
-            this,                 // Parameter passed to the task (pointer to this instance)
-            1,                    // Task priority
-            &taskHandle,          // Task handle
-            0                     // Core ID (0)
+            EmWiFi::wifiTaskCore_, // Function to execute
+            "EmWiFi_task",         // Name of task
+            4096,                  // Stack size in words
+            nullptr,               // Parameter passed to the task (pointer to this instance)
+            1,                     // Task priority
+            &taskHandle,           // Task handle
+            0                      // Core ID (0)
         );
         m_taskHandle = taskHandle;
         return taskHandle != nullptr;
@@ -61,7 +68,7 @@ bool EmWiFi::start(uint16_t checkIntervalSec, EmWiFiLevel checkLevel) {
     return false;
 }
 
-void EmWiFi::stop() {
+void EmWiFi::stopConnectionLoop() {
     if (m_taskHandle != nullptr) {
         vTaskDelete(m_taskHandle);
         m_taskHandle = nullptr;
@@ -69,6 +76,9 @@ void EmWiFi::stop() {
 }
 
 void EmWiFi::connect(const char* ssid, const char* password, EmDuration waitTime) {
+    // In case not initialized!
+    init();
+
     wifi_config_t wifi_config = {};
     strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), ssid, sizeof(wifi_config.sta.ssid));
     strncpy(reinterpret_cast<char*>(wifi_config.sta.password), password, sizeof(wifi_config.sta.password));    
@@ -90,11 +100,16 @@ void EmWiFi::disconnect() {
 }
 
 void EmWiFi::eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    // Cast the void pointer back to our class instance
+    EmWiFi* self = static_cast<EmWiFi*>(arg);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         m_connected = false;
+        self->raiseEvent_(EmWiFiEventType::disconnected);
+
     } else
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         m_connected = true;
+        self->raiseEvent_(EmWiFiEventType::connected);
     }
 }
 

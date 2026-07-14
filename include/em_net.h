@@ -13,7 +13,9 @@ public:
         if (m_initialized) {
             return true;
         }
-        m_initialized = esp_netif_init() == ESP_OK;
+        // We set initialize as soon as possible to avoid someone else colling this!
+        m_initialized = true; 
+        ESP_ERROR_CHECK(esp_netif_init()); // Pass or abort!
         return m_initialized;
     }
 

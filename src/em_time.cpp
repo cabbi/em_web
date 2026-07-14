@@ -7,7 +7,7 @@ bool EmTime::begin(const EmDuration& initTimeout,
                    const char* ntpServer3) {
     // already stared?
     if (s_isStarted) {
-        return false;
+        return s_isInitialized;
     }
 
     // Initialize time handling

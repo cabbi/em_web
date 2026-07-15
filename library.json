@@ -15,6 +15,6 @@
     "cabbi/EmCore": ">=2.1.0"
   },
   "license": "BSD-3-Clause",
-  "frameworks": ["arduino"],
+  "frameworks": ["arduino", "espidf"],
   "platforms": "*"
 }

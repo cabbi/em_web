@@ -1,7 +1,9 @@
 #ifndef __EM_MQTT_CLIENT_H
 #define __EM_MQTT_CLIENT_H
 
-#include <mqtt_client.h>
+//extern "C" {
+    #include <mqtt_client.h>
+//}
 
 #include "em_string.h"
 

@@ -1,13 +1,14 @@
-#include "EmUpdate.hpp"
-#include "esp_log.h"
+#include "em_update.h"
+
+#include <esp_log.h>
 
 static const char* TAG = "EmUpdate";
 
 EmUpdate::EmUpdate() 
-    : _update_handle(0), _update_partition(nullptr), _is_running(false), _size(0) {}
+    : m_updateHandle(0), m_updatePartition(nullptr), m_isRunning(false), m_size(0) {}
 
 EmUpdate::~EmUpdate() {
-    if (_is_running) {
+    if (m_isRunning) {
         abort();
     }
 }
@@ -16,43 +17,39 @@ EmUpdate::~EmUpdate() {
  * Initializes the OTA update process and finds the next boot partition.
  */
 bool EmUpdate::begin(size_t size) {
-    if (_is_running) {
-        ESP_LOGW(TAG, "OTA update already running");
+    if (m_isRunning) {
         return false;
     }
 
-    _size = size;
+    m_size = size;
     
     // Find the next available OTA partition to write into
-    _update_partition = esp_ota_get_next_update_partition(NULL);
-    if (_update_partition == NULL) {
+    m_updatePartition = esp_ota_get_next_update_partition(NULL);
+    if (m_updatePartition == NULL) {
         ESP_LOGE(TAG, "Passive OTA partition not found");
         return false;
     }
 
     ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
-             _update_partition->subtype, _update_partition->address);
+             m_updatePartition->subtype, m_updatePartition->address);
 
     // Initialize the OTA process
-    esp_err_t err = esp_ota_begin(_update_partition, _size, &_update_handle);
+    esp_err_t err = esp_ota_begin(m_updatePartition, m_size, &m_updateHandle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
         return false;
     }
 
-    _is_running = true;
+    m_isRunning = true;
     return true;
 }
 
-/**
- * Writes a chunk of the binary firmware array to the flash memory.
- */
 size_t EmUpdate::write(const uint8_t* data, size_t len) {
-    if (!_is_running) {
+    if (!m_isRunning) {
         return 0;
     }
 
-    esp_err_t err = esp_ota_write(_update_handle, data, len);
+    esp_err_t err = esp_ota_write(m_updateHandle, data, len);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
         abort();
@@ -62,18 +59,20 @@ size_t EmUpdate::write(const uint8_t* data, size_t len) {
     return len;
 }
 
-/**
- * Validates the written image and sets it as the next boot target.
- */
+size_t EmUpdate::writeStream(EmStream& stream) {
+    // TODO CABBI
+    return 0;
+}
+
 bool EmUpdate::end() {
-    if (!_is_running) {
+    if (!m_isRunning) {
         return false;
     }
 
-    _is_running = false;
+    m_isRunning = false;
 
     // End the OTA handle session
-    esp_err_t err = esp_ota_end(_update_handle);
+    esp_err_t err = esp_ota_end(m_updateHandle);
     if (err != ESP_OK) {
         if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
             ESP_LOGE(TAG, "Image validation failed, image is corrupted");
@@ -84,7 +83,7 @@ bool EmUpdate::end() {
     }
 
     // Set the freshly written partition as the boot target for next restart
-    err = esp_ota_set_boot_partition(_update_partition);
+    err = esp_ota_set_boot_partition(m_updatePartition);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)", esp_err_to_name(err));
         return false;
@@ -94,13 +93,10 @@ bool EmUpdate::end() {
     return true;
 }
 
-/**
- * Terminate the update if a network drops or a packet fails mid-air.
- */
 void EmUpdate::abort() {
-    if (_is_running) {
-        esp_ota_abort(_update_handle);
-        _is_running = false;
+    if (m_isRunning) {
+        esp_ota_abort(m_updateHandle);
+        m_isRunning = false;
         ESP_LOGW(TAG, "OTA operation aborted.");
     }
 }

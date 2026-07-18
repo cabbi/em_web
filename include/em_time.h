@@ -6,6 +6,7 @@
 #ifdef EM_TIME
 
 #include <time.h>
+#include <esp_timer.h>
 #include <esp_sntp.h>
 
 #include "em_log.h"

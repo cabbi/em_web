@@ -1,13 +1,16 @@
-#include "em_update.h"
+#include "em_firmware_update.h"
 
 #include <esp_log.h>
 
-static const char* TAG = "EmUpdate";
+// TODO CABBI Review entire code!!!
 
-EmUpdate::EmUpdate() 
+
+static const char* TAG = "EmFirmwareUpdate";
+
+EmFirmwareUpdate::EmFirmwareUpdate() 
     : m_updateHandle(0), m_updatePartition(nullptr), m_isRunning(false), m_size(0) {}
 
-EmUpdate::~EmUpdate() {
+EmFirmwareUpdate::~EmFirmwareUpdate() {
     if (m_isRunning) {
         abort();
     }
@@ -16,7 +19,7 @@ EmUpdate::~EmUpdate() {
 /**
  * Initializes the OTA update process and finds the next boot partition.
  */
-bool EmUpdate::begin(size_t size) {
+bool EmFirmwareUpdate::begin(size_t size) {
     if (m_isRunning) {
         return false;
     }
@@ -44,7 +47,7 @@ bool EmUpdate::begin(size_t size) {
     return true;
 }
 
-size_t EmUpdate::write(const uint8_t* data, size_t len) {
+size_t EmFirmwareUpdate::write(const uint8_t* data, size_t len) {
     if (!m_isRunning) {
         return 0;
     }
@@ -59,12 +62,12 @@ size_t EmUpdate::write(const uint8_t* data, size_t len) {
     return len;
 }
 
-size_t EmUpdate::writeStream(EmStream& stream) {
+size_t EmFirmwareUpdate::writeStream(EmStream& stream) {
     // TODO CABBI
     return 0;
 }
 
-bool EmUpdate::end() {
+bool EmFirmwareUpdate::end() {
     if (!m_isRunning) {
         return false;
     }
@@ -93,7 +96,7 @@ bool EmUpdate::end() {
     return true;
 }
 
-void EmUpdate::abort() {
+void EmFirmwareUpdate::abort() {
     if (m_isRunning) {
         esp_ota_abort(m_updateHandle);
         m_isRunning = false;

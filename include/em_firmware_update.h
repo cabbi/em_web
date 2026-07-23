@@ -22,16 +22,19 @@ public:
     ~EmFirmwareUpdate();
 
     bool begin(size_t size = OTA_SIZE_UNKNOWN);
-    size_t write(const uint8_t* data, size_t len);
     size_t writeStream(EmStream& stream);
     bool end();
     void abort();
+
+protected:
+    size_t writeBytes_(const uint8_t* data, size_t len);
 
 private:
     esp_ota_handle_t m_updateHandle;
     const esp_partition_t* m_updatePartition;
     bool m_isRunning;
     size_t m_size;    
+    size_t m_bytesWritten;
 };
 
 // The ESP OTA Updater class

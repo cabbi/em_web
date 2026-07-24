@@ -89,7 +89,7 @@ void EmWiFi::connect(const char* ssid, const char* password, EmDuration waitTime
     // Lets wait extra time for this new connection
     EmTimeout conTimeout(10000);
     while (!isConnected() && !conTimeout.isExpired(false)) {
-        tDelay(100);
+        tDelay(100, true);
     }
 }
 
@@ -176,6 +176,6 @@ void EmWiFi::wifiTaskCore_(void* pvParameters) {
                               EmDuration(0,0,10));  // Lets wait 10 seconds
             }
         }
-        tDelay(self->m_checkIntervalSec*1000);
+        tDelay(self->m_checkIntervalSec*1000, true);
     }
 }

@@ -28,7 +28,7 @@ bool EmTime::begin(const EmDuration& initTimeout,
     // Waiting loop... note that s_isInitialized is set in the callback 
     EmTimeout timeout(initTimeout);
     while (!s_isInitialized && !timeout.isExpired()) {
-        tDelay(100);
+        tDelay(100, true);
     }    
     return s_isInitialized;
 }

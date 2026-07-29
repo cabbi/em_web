@@ -98,7 +98,19 @@ struct EmWiFiEventHandler {
 // connecting to the best available network from a pool of credentials.
 class EmWiFi {
 public:
+
+// Define 'EM_XIAO_C6' in case you're using a 'Seeed XIAO C6' board
+#ifdef EM_XIAO_C6  
+    enum class AntennaType: uint8_t {
+        internal = 0,
+        external = 1
+    };
+    static void init(AntennaType antennaType=AntennaType::internal);
+    static void switchAntenna(AntennaType antennaType);
+#else
     static void init();
+#endif //EM_XIAO_C6
+
 
     // Add a new network configuration to the AP list.
     // Max 128 APs

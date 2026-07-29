@@ -4,7 +4,25 @@
 #include "em_net.h"
 #include "em_timeout.h"
 
+#ifdef EM_XIAO_C6
+#include "em_gpio.h"
+
+// Define the internal XIAO antenna routing pins
+#define XIAO_WIFI_ENABLE       3
+#define XIAO_WIFI_ANT_CONFIG   14
+
+void EmWiFi::switchAntenna(AntennaType antennaType) {
+    pinMode(XIAO_WIFI_ANT_CONFIG, OUTPUT);
+    digitalWrite(XIAO_WIFI_ANT_CONFIG, antennaType == AntennaType::internal ? 0 : 1);
+}
+
+void EmWiFi::init(AntennaType antennaType) {
+    switchAntenna(antennaType);
+    pinMode(XIAO_WIFI_ENABLE, OUTPUT);
+    digitalWrite(XIAO_WIFI_ENABLE, 0); // LOW powers ON the switch component
+#else
 void EmWiFi::init() {
+#endif
     EmMutexLock lock(m_initMutex);
     if (m_netif != nullptr) {
         // already initialized!

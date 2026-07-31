@@ -7,6 +7,7 @@
 
 #include "esp_wifi.h"
 
+#include "em_log.h"
 #include "em_string.h"
 #include "em_duration.h"
 #include "em_threading.h"
@@ -47,17 +48,14 @@ struct EmWiFiCredential {
     EmWiFiCredential(const char* ssid_val, const char* pwd_val)
      : ssid(ssid_val), password(pwd_val) {}
 
-    EmWiFiCredential(EmWiFiCredential& other)
-     : ssid(other.ssid.c_str()), password(other.password.c_str()) {}
-    EmWiFiCredential(const EmWiFiCredential& other)
-     : ssid(other.ssid.c_str()), password(other.password.c_str()) {}
-    
-    EmWiFiCredential& operator=(EmWiFiCredential& other) {
-        ssid.set(other.ssid); password.set(other.password);
-        return *this;
+    EmWiFiCredential(const EmWiFiCredential& other) {
+        ssid.set(other.ssid);
+        password.set(other.password);
     }
+    
     EmWiFiCredential& operator=(const EmWiFiCredential& other) {
-        ssid.set(other.ssid); password.set(other.password);
+        ssid.set(other.ssid); 
+        password.set(other.password);
         return *this;
     }
 
@@ -73,13 +71,28 @@ struct EmWiFiCredential {
 // WiFi event types
 enum class EmWiFiEventType: uint8_t {
     connected = 0,
-    disconnected = 1
+    disconnected = 1,
+    scanBegin = 2,
+    scanEnd = 2,
 };
+
+// WiFi Power Save mode
+enum class EmWiFiPsMode: uint8_t {
+    none = WIFI_PS_NONE,
+    min = WIFI_PS_MIN_MODEM,
+    max = WIFI_PS_MAX_MODEM,
+};    
 
 // WiFi event callback result
 enum class EmWiFiEventResult: uint8_t {
     none = 0,
     removeHandler = 1
+};
+
+// WiFi antenna type (if supported!)
+enum class EmWiFiAntennaType: uint8_t {
+    internal = 0,
+    external = 1
 };
 
 // WiFi event callback prototype
@@ -94,22 +107,20 @@ struct EmWiFiEventHandler {
     void* userArg;       
 };
 
+// NOTE:
+// Define 'EM_XIAO_C6' in case you're using a 'Seeed XIAO C6' board
+// in order to use 'switchAntenna' method
+
+
 // This class manages Wi-Fi connections and orchestrates scanning and  
 // connecting to the best available network from a pool of credentials.
 class EmWiFi {
 public:
 
-// Define 'EM_XIAO_C6' in case you're using a 'Seeed XIAO C6' board
-#ifdef EM_XIAO_C6  
-    enum class AntennaType: uint8_t {
-        internal = 0,
-        external = 1
-    };
-    static void init(AntennaType antennaType=AntennaType::internal);
-    static void switchAntenna(AntennaType antennaType);
-#else
-    static void init();
-#endif //EM_XIAO_C6
+    static void init(EmWiFiPsMode psMode = EmWiFiPsMode::none, 
+                     EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal);
+
+    static bool switchAntenna(EmWiFiAntennaType antennaType);
 
 
     // Add a new network configuration to the AP list.
@@ -158,6 +169,11 @@ public:
     
     // Disconnects from current Access Point 
     static void disconnect();
+
+    static bool isInitialized() {
+        EmMutexLock lock(m_initMutex);
+        return m_netif != nullptr;
+    }
 
     static bool isConnectionLoopRunning() {
         return m_taskHandle != nullptr;

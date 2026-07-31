@@ -1,33 +1,40 @@
 #include "em_wifi.h"
 
-#include "em_log.h"
 #include "em_net.h"
 #include "em_timeout.h"
 
 #ifdef EM_XIAO_C6
-#include "em_gpio.h"
+    #include "em_gpio.h"
+    // Define the internal XIAO antenna routing pins
+    #define XIAO_WIFI_ENABLE       3
+    #define XIAO_WIFI_ANT_CONFIG   14
+#endif
 
-// Define the internal XIAO antenna routing pins
-#define XIAO_WIFI_ENABLE       3
-#define XIAO_WIFI_ANT_CONFIG   14
-
-void EmWiFi::switchAntenna(AntennaType antennaType) {
+bool EmWiFi::switchAntenna(EmWiFiAntennaType antennaType) {
+#ifdef EM_XIAO_C6  
     pinMode(XIAO_WIFI_ANT_CONFIG, OUTPUT);
-    digitalWrite(XIAO_WIFI_ANT_CONFIG, antennaType == AntennaType::internal ? 0 : 1);
+    digitalWrite(XIAO_WIFI_ANT_CONFIG, antennaType == EmWiFiAntennaType::internal ? 0 : 1);
+    tDelay(50, true);
+    return true;
+#endif
+    return false;
 }
 
-void EmWiFi::init(AntennaType antennaType) {
-    switchAntenna(antennaType);
-    pinMode(XIAO_WIFI_ENABLE, OUTPUT);
-    digitalWrite(XIAO_WIFI_ENABLE, 0); // LOW powers ON the switch component
-#else
-void EmWiFi::init() {
-#endif
+void EmWiFi::init(EmWiFiPsMode psMode, EmWiFiAntennaType antennaType) {
     EmMutexLock lock(m_initMutex);
     if (m_netif != nullptr) {
         // already initialized!
         return;
     }
+    logDebug("EmWiFi", "Initializing WiFi...");
+
+#ifdef EM_XIAO_C6
+    pinMode(XIAO_WIFI_ENABLE, OUTPUT);
+    digitalWrite(XIAO_WIFI_ENABLE, 0); // LOW powers ON the switch component
+    tDelay(100, true); // Requested delay before antenna selection
+#endif
+
+    switchAntenna(antennaType);
 
     // Initialize the Idf underlying TCP/IP stack
     EmNet::init();
@@ -50,6 +57,7 @@ void EmWiFi::init() {
                                         nullptr,
                                         nullptr);
     esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_ps(static_cast<wifi_ps_type_t>(psMode));
     esp_wifi_start();
 }
 
@@ -97,15 +105,28 @@ void EmWiFi::connect(const char* ssid, const char* password, EmDuration waitTime
     // In case not initialized!
     init();
 
+    logDebug<100>("EmWiFi", "Connecting to '%s'...", ssid);
+
+    // Need to disconnect first?
+    if (EmWiFi::isConnected()) {
+        esp_wifi_disconnect();
+        logDebug("EmWiFi", "Disconnecting...");
+        EmTimeout disconnectionTimeout(1000);
+        while (EmWiFi::isConnected() && disconnectionTimeout.isNotExpired()) {
+            tDelay(20, true); 
+        }
+    }
+
     wifi_config_t wifi_config = {};
+    wifi_config.sta.scan_method = WIFI_FAST_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), ssid, sizeof(wifi_config.sta.ssid));
     strncpy(reinterpret_cast<char*>(wifi_config.sta.password), password, sizeof(wifi_config.sta.password));    
-    esp_wifi_disconnect();
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_connect();
     setCurrentSsid_(ssid);
     // Lets wait extra time for this new connection
-    EmTimeout conTimeout(10000);
+    EmTimeout conTimeout(waitTime);
     while (!isConnected() && !conTimeout.isExpired(false)) {
         tDelay(100, true);
     }
@@ -121,11 +142,16 @@ void EmWiFi::eventHandler_(void* arg, esp_event_base_t event_base, int32_t event
     // Cast the void pointer back to our class instance
     EmWiFi* self = static_cast<EmWiFi*>(arg);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        logDebug("EmWiFi", "Disconnected!");
         m_connected = false;
         self->raiseEvent_(EmWiFiEventType::disconnected);
-
+    } else
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        logDebug("EmWiFi", "Connected!");
+        m_connected = false;
     } else
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        logDebug("EmWiFi", "Got IP!");
         m_connected = true;
         self->raiseEvent_(EmWiFiEventType::connected);
     }
@@ -151,11 +177,15 @@ bool EmWiFi::getBestNetwork_(EmWiFiCredential& bestNetwork) {
         return false;
     }
     // Check if any network matches and take the best one
+    raiseEvent_(EmWiFiEventType::scanBegin);
     bool networkFound = false;
     int8_t highestRssi = -127;
     wifi_ap_record_t scannedAp;
     for (int i = 0; i < scanResult; i++) {
         if (esp_wifi_scan_get_ap_record(&scannedAp) == ESP_OK) {
+            logDebug<100>("EmWiFi", "Found '%s' network [%d]", 
+                          scannedAp.ssid, 
+                          (int)scannedAp.rssi);
             EmMutexLock lock(m_networkMutex);
             for (auto& _network : m_networks) {
                 if (_network.ssid.equals(reinterpret_cast<char*>(scannedAp.ssid))) {
@@ -169,7 +199,11 @@ bool EmWiFi::getBestNetwork_(EmWiFiCredential& bestNetwork) {
             }
         }
     }
+    if (networkFound) {
+        logDebug<100>("EmWiFi", "Best network: '%s'", bestNetwork.ssid.c_str());
+    }
     esp_wifi_clear_ap_list();
+    raiseEvent_(EmWiFiEventType::scanEnd);
     return networkFound;
 }
 

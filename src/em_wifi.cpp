@@ -83,7 +83,7 @@ bool EmWiFi::startConnectionLoop(uint16_t checkIntervalSec, EmWiFiLevel checkLev
             EmWiFi::wifiTaskCore_, // Function to execute
             "EmWiFi_task",         // Name of task
             4096,                  // Stack size in words
-            nullptr,               // Parameter passed to the task (pointer to this instance)
+            nullptr,               // Parameter passed to the task
             1,                     // Task priority
             &taskHandle,           // Task handle
             0                      // Core ID (0)
@@ -139,12 +139,10 @@ void EmWiFi::disconnect() {
 }
 
 void EmWiFi::eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    // Cast the void pointer back to our class instance
-    EmWiFi* self = static_cast<EmWiFi*>(arg);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         logDebug("EmWiFi", "Disconnected!");
         m_connected = false;
-        self->raiseEvent_(EmWiFiEventType::disconnected);
+        EmWiFi::raiseEvent_(EmWiFiEventType::disconnected);
     } else
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         logDebug("EmWiFi", "Connected!");
@@ -153,7 +151,7 @@ void EmWiFi::eventHandler_(void* arg, esp_event_base_t event_base, int32_t event
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         logDebug("EmWiFi", "Got IP!");
         m_connected = true;
-        self->raiseEvent_(EmWiFiEventType::connected);
+        EmWiFi::raiseEvent_(EmWiFiEventType::connected);
     }
 }
 
@@ -208,26 +206,24 @@ bool EmWiFi::getBestNetwork_(EmWiFiCredential& bestNetwork) {
 }
 
 void EmWiFi::wifiTaskCore_(void* pvParameters) {
-    // Cast the void pointer back to our class instance
-    EmWiFi* self = static_cast<EmWiFi*>(pvParameters);
     // Endless loop until task is killed
     while (true) {
-        if (!self->m_networks.empty() &&                    // Any user defined AP
-            (self->isNotConnected() ||                      // Is WiFi disconnected
-             self->getWiFiLevel() <= self->m_checkLevel)) { // Is WiFi level poor
+        if (!EmWiFi::m_networks.empty() &&                    // Any user defined AP
+            (EmWiFi::isNotConnected() ||                      // Is WiFi disconnected
+             EmWiFi::getWiFiLevel() <= EmWiFi::m_checkLevel)) { // Is WiFi level poor
             // Clear current network ssid if disconnected
-            if (self->isNotConnected()) {
-                self->clearCurrentSsid_();
+            if (EmWiFi::isNotConnected()) {
+                EmWiFi::clearCurrentSsid_();
             }
             // Get the best user defined AP if any is found
             EmWiFiCredential bestNetwork;
-            if (self->getBestNetwork_(bestNetwork) &&      // Any network found
-                !self->isCurrentSsid_(bestNetwork.ssid)) { // Different than this one
-                self->connect(bestNetwork.ssid.c_str(), 
+            if (EmWiFi::getBestNetwork_(bestNetwork) &&      // Any network found
+                !EmWiFi::isCurrentSsid_(bestNetwork.ssid)) { // Different than this one
+                EmWiFi::connect(bestNetwork.ssid.c_str(), 
                               bestNetwork.password.c_str(), 
                               EmDuration(0,0,10));  // Lets wait 10 seconds
             }
         }
-        tDelay(self->m_checkIntervalSec*1000, true);
+        tDelay(EmWiFi::m_checkIntervalSec*1000, true);
     }
 }

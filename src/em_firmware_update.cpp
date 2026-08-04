@@ -52,7 +52,7 @@ bool EmFirmwareUpdate::begin(size_t size) {
     return true;
 }
 
-size_t EmFirmwareUpdate::writeStream(EmStream& stream) {
+size_t EmFirmwareUpdate::writeStream(EmStreamRx& stream) {
     if (!m_isRunning) {
         return 0;
     }

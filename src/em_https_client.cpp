@@ -186,6 +186,7 @@ bool EmHttpsClient::executeRequest_(const char* endpoint,
         logError<50>("EmHttpsClient", "Connection failed: %s", esp_err_to_name(err));
     }
 
+    gotAllResponse = m_gotAllResponse;
     return success;
 }
 

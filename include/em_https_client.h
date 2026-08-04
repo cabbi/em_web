@@ -59,6 +59,14 @@ public:
     bool postJson(const char* endpoint, 
                   const char* cmd,
                   const char* params, 
+                  EmStringBase& response, 
+                  bool& gotAllResponse) {
+        return postJson(endpoint, cmd, params, response.buffer(), response.capacity(), gotAllResponse);
+    }
+
+    bool postJson(const char* endpoint, 
+                  const char* cmd,
+                  const char* params, 
                   char* response, 
                   size_t responseSize, 
                   bool& gotAllResponse) {
@@ -104,6 +112,7 @@ protected:
             if (toCopy > 0) {
                 strncat(m_resBuffer, data, toCopy);
             }
+            logInfo<100>("EmHttpsClient", "--->%s [len=%zu, spaceLeft=%zu, gotAllResponse=%s]", m_resBuffer, len, spaceLeft, m_gotAllResponse ? "true" : "false");
         }
     }
 
@@ -142,7 +151,7 @@ private:
 // This class is used to make a request and read the response in a streaming manner, 
 // which is useful for large responses that don't fit in memory.
 // This class automatically supports Base64 encoded responses and decodes them on-the-fly.
-class EmHttpsRequestStream: public EmStream {
+class EmHttpsRequestStream: public EmStreamRx {
     friend class EmHttpsClient;
 public:
     EmHttpsRequestStream(EmHttpsClient& client,

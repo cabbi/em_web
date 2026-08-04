@@ -22,7 +22,7 @@ public:
     ~EmFirmwareUpdate();
 
     bool begin(size_t size = OTA_SIZE_UNKNOWN);
-    size_t writeStream(EmStream& stream);
+    size_t writeStream(EmStreamRx& stream);
     bool end();
     void abort();
 
@@ -40,7 +40,7 @@ private:
 // The ESP OTA Updater class
 class Esp32OtaUpdater: public EmOtaUpdater {
 public:
-    virtual bool update(EmStream& client, size_t contentLength) override {
+    virtual bool update(EmStreamRx& client, size_t contentLength) override {
         EmFirmwareUpdate update;
         if (!update.begin(contentLength)) {
             logError("Esp32OtaUpdater", "Not enough space to begin OTA");

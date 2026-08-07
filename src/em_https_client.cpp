@@ -91,15 +91,25 @@ bool EmHttpsClient::beginRequest_(const char* endpoint,
     // during the headers fetching (i.e 'esp_http_client_fetch_headers')
     m_isBase64 = false;
     
-    int write_len = (payload != nullptr) ? strlen(payload) : 0;
-    if (esp_http_client_open(m_clientHandle, write_len) != ESP_OK) {
+    int payloadLen = (payload != nullptr) ? strlen(payload) : 0;
+
+    if (payloadLen > 0) {
+        char len_str[16];
+        snprintf(len_str, sizeof(len_str), "%d", payloadLen);
+        esp_http_client_set_header(m_clientHandle, "Content-Length", len_str);
+        esp_http_client_set_header(m_clientHandle, "Content-Type", "application/json"); 
+    } else if (method == HTTP_METHOD_POST || method == HTTP_METHOD_PUT) {
+        esp_http_client_set_header(m_clientHandle, "Content-Length", "0");
+    }
+
+    if (esp_http_client_open(m_clientHandle, payloadLen) != ESP_OK) {
         m_openRequest = false;
         m_resMutex.unlock();
         return false;
     }
 
-    if (write_len > 0) {
-        if (esp_http_client_write(m_clientHandle, payload, write_len) < 0) {
+    if (payloadLen > 0) {
+        if (esp_http_client_write(m_clientHandle, payload, payloadLen) < 0) {
             esp_http_client_close(m_clientHandle);
             m_openRequest = false;
             m_resMutex.unlock();

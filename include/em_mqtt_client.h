@@ -1,61 +1,67 @@
 #ifndef __EM_MQTT_CLIENT_H
 #define __EM_MQTT_CLIENT_H
 
-//extern "C" {
-    #include <mqtt_client.h>
-//}
+#include <mqtt_client.h>
+#include <vector>
+
+// FreeRTOS includes for Mutex handling
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "em_string.h"
+#include "em_threading.h"
+
 
 using EmMqttStringTopic = EmStringL;
 using EmMqttStringPayload = EmStringXL;
 
-// A ESP IDF base Mqtt client implementation
+// An MQTT client class that wraps the ESP-IDF MQTT client functionality.
+// The client automatically handles re-connections and allows for multiple topic subscriptions 
+// with individual callbacks. All user subscriptions are automatically restored on re-connection. 
+// NOTE: 
+// if you are using TLS, you must ensure that time is synchronized. You can use 'EmTime' class for this purpose.
 class EmMqttClient {
 public:
-    typedef void (*EmMqttOnMsgCallback)(int msgId, const EmStringBase& topic, const EmStringBase& payload);
+    typedef void (*EmMqttOnMsgCallback)(const EmStringBase& topic, const EmStringBase& payload);
     typedef void (*EmMqttOnConnectCallback)(const EmMqttClient& self);
-    
-    // Connects to MQTT server.
-    // User can set a message callback used to receive subscribed topics,
-    // and a connection callback generally used to subscribe to desired topics.
-    // If the connection drops, the client must again subscribe its topics!
+
+    EmMqttClient() = default;    
+    ~EmMqttClient() {
+        disconnect(true);
+    }
+
+    // Connects to the MQTT broker with optional TLS parameters.
+    // If 'root_ca' is provided, it will be used for server certificate verification.
     bool connect(const char* endpoint, 
-                 EmMqttOnMsgCallback msgCallback,
-                 EmMqttOnConnectCallback connectCallback, 
+                 EmMqttOnConnectCallback connectCallback = nullptr, 
+                 uint16_t port = 8883,
                  const char* root_ca = nullptr, 
                  const char* client_cert = nullptr, 
                  const char* client_key = nullptr,
                  int keepaliveSec = 120);
 
-    // Disconnect and close the current client MQTT connection.
-    bool disconnect();
+    bool disconnect(bool removeAllSubscriptions);
 
-    // Publish a payload to a topic
-    bool publish(const char* topic,
-                 const char* payload, 
-                 int qos = 1) const;
+    bool publish(const char* topic, const char* payload, int qos = 1) const;
+    
+    void subscribe(const char* topic, EmMqttOnMsgCallback msgCallback, int qos = 1);
+    bool unsubscribe(const char* topic);
+    void unsubscribeAll();
 
-    // Subscribe a topic. 
-    // Returns the tracking Message ID for that topic or -1 on failure.
-    int subscribe(const char* topic, int qos = 1) const;
-
-    bool isConnected() {
-        return m_client != nullptr;
-    }
+    bool isConnected() const;
 
 protected:
-    void onMessage_(int msgId, const EmStringBase& topic, const EmStringBase& payload) {
-        if (m_msgCallback) {
-            m_msgCallback(msgId, topic, payload);
-        }
-    }
+    struct Subscription_ {
+        EmMqttStringTopic topicFilter;
+        EmMqttOnMsgCallback callback;
+        int qos;
+    };
 
-    void onConnect_() {
-        if (m_connectCallback != nullptr) {
-            m_connectCallback(*this);
-        }
-    }
+    void onMessage_(const EmStringBase& topic, const EmStringBase& payload);
+    void onConnect_();
+    void onDisconnect_();
+
+    bool matchTopic_(const char* filter, const char* topic) const;
 
     static void mqttEventHandler_(void* handler_args, 
                                   esp_event_base_t base, 
@@ -63,10 +69,16 @@ protected:
                                   void* event_data);
 
 private:
-    // Member vars
-    esp_mqtt_client_handle_t m_client = nullptr;    
-    EmMqttOnMsgCallback m_msgCallback = nullptr;
+    mutable EmMutex m_subscriptionMutex;
+
+    std::atomic<esp_mqtt_client_handle_t> m_client = nullptr;    
     EmMqttOnConnectCallback m_connectCallback = nullptr;
+    
+    std::vector<Subscription_*> m_subscriptions;
+    ts_bool m_connected = false;
+
+    EmMqttStringTopic m_currentTopic;
+    EmMqttStringPayload m_currentPayload;
 };
 
-#endif //__EM_MQTT_CLIENT_H
+#endif

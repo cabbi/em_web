@@ -13,19 +13,26 @@
 #include "em_timeout.h"
 #include "em_threading.h"
 #include "em_duration.h"
+#include "em_wifi.h"
 
 using EmEpochTypeSec = uint32_t;
 using EmEpochTypeMilli = uint64_t;
-
-// TODO: set a callback to EmWiFi in order t initialize time on WiFi connection event!
 
 // EmTime class for handling time-related operations.
 // Class has only static methods since it cannot have multiple instances.
 class EmTime {
 public:
     // Begins the time management by configuring the NTP server and time zone
+    // waiting for a timeout. Call this method if you are connected to WiFi.  
     static bool begin(const EmDuration& initTimeout,
                       const char* tz = nullptr,
+                      const char* ntpServer1 = "pool.ntp.org",
+                      const char* ntpServer2 = "time.nist.gov",
+                      const char* ntpServer3 = nullptr);
+
+    // Begins the time management by configuring the NTP server and time zone
+    // waiting for EmWiFi callback once connected to the internet.  
+    static bool begin(const char* tz = nullptr,
                       const char* ntpServer1 = "pool.ntp.org",
                       const char* ntpServer2 = "time.nist.gov",
                       const char* ntpServer3 = nullptr);
@@ -73,13 +80,21 @@ public:
     }    
 
 private:
+    static bool setup_(const char* tz = nullptr,
+                       const char* ntpServer1 = "pool.ntp.org",
+                       const char* ntpServer2 = "time.nist.gov",
+                       const char* ntpServer3 = nullptr);
+    static bool start_();
     static void timeSyncNotificationCallback_(struct timeval *tv) {
         s_isInitialized = true;
     }
     
+    static EmWiFiEventResult wifiEventCallback_(void* userArg, EmWiFiEventType event);
+    
     // Member vars
     inline static ts_bool s_isStarted = false;
     inline static ts_bool s_isInitialized = false;
+    inline static EmWiFiEventHandler s_wifiEventHandler = {wifiEventCallback_, nullptr};
 };
 
 #endif

@@ -2,13 +2,13 @@
 #include "em_mqtt_client.h"
 
 bool EmMqttClient::connect(const char* endpoint,
-                           EmMqttOnConnectCallback connectCallback, 
-                           uint16_t port, 
+                           uint16_t port,
+                           EmMqttOnStatusChangedCallback statusChangedCallback, 
                            const char* root_ca, 
                            const char* client_cert, 
                            const char* client_key,
                            int keepaliveSec) {
-    m_connectCallback = connectCallback;
+    m_statusChangedCallback = statusChangedCallback;
 
     esp_mqtt_client_config_t mqtt_cfg = {};
     mqtt_cfg.broker.address.uri = endpoint;
@@ -50,14 +50,17 @@ bool EmMqttClient::connect(const char* endpoint,
 }
 
 bool EmMqttClient::disconnect(bool removeAllSubscriptions) {
-    if (m_client.load() == nullptr) {
-        return false;
-    }
-
+    // First lets remove subscriptions if requested
     if (removeAllSubscriptions) {
         unsubscribeAll();
     }
 
+    // Client initialized?
+    if (m_client.load() == nullptr) {
+        return false;
+    }
+
+    // Stop and free the current client handle
     esp_mqtt_client_stop(m_client.load());
     esp_mqtt_client_destroy(m_client.load());
     m_client.store(nullptr);
@@ -76,18 +79,21 @@ bool EmMqttClient::isConnected() const {
     return m_connected.load();
 }
 
-void EmMqttClient::subscribe(const char* topic, EmMqttOnMsgCallback msgCallback, int qos) {
+void EmMqttClient::subscribe(void* userData, 
+                             const char* topic, 
+                             EmMqttOnMsgCallback msgCallback, 
+                             int qos) {
     EmMutexLock lock(m_subscriptionMutex);
     
-    // Alloca l'oggetto direttamente nell'heap. L'assegnazione iniziale da const char* 
-    // chiama il costruttore base di EmString (Candidate 1 nel tuo log di errore), bypassando la copia.
     Subscription_* sub = new Subscription_();
+    sub->userData = userData;
     sub->topicFilter.set(topic); 
     sub->callback = msgCallback;
     sub->qos = qos;
     
-    m_subscriptions.push_back(sub); // Il vettore memorizza il puntatore triviale senza problemi
+    m_subscriptions.push_back(sub);
 
+    // Subscribe the topic if connected, if not it will do once connection is established
     if (m_connected.load() && m_client.load() != nullptr) {
         esp_mqtt_client_subscribe(m_client.load(), topic, qos);
     }
@@ -105,7 +111,8 @@ bool EmMqttClient::unsubscribe(const char* topic) {
             found = true;
         }
     }
-
+    
+    // Unsubscribe the topic if connected
     if (m_connected.load() && m_client.load() != nullptr) {
         int msg_id = esp_mqtt_client_unsubscribe(m_client.load(), topic);
         return (msg_id >= 0);
@@ -118,6 +125,7 @@ void EmMqttClient::unsubscribeAll() {
     EmMutexLock lock(m_subscriptionMutex);
     
     for (const auto& sub : m_subscriptions) {
+        // Unsubscribe the topic if connected
         if (m_connected.load() && m_client.load() != nullptr) {
             esp_mqtt_client_unsubscribe(m_client.load(), sub->topicFilter.c_str());
         }
@@ -135,34 +143,66 @@ void EmMqttClient::onConnect_() {
         esp_mqtt_client_subscribe(m_client.load(), sub->topicFilter.c_str(), sub->qos);
     }
 
-    if (m_connectCallback != nullptr) {
-        m_connectCallback(*this);
+    if (m_statusChangedCallback != nullptr) {
+        m_statusChangedCallback(*this, true);
     }
 }
 
 void EmMqttClient::onDisconnect_() {
     m_connected.store(false);
     logWarning("EmMqttClient", "Disconnected from broker.");
+    if (m_statusChangedCallback != nullptr) {
+        m_statusChangedCallback(*this, false);
+    }
 }
 
 bool EmMqttClient::matchTopic_(const char* filter, const char* topic) const {
-    while (*filter && *topic) {
+    // Valid input?
+    if (filter == nullptr || topic == nullptr) {
+        return false;
+    }
+
+    while (*filter) {
+        // Case 1: Handle multi-level wildcard '#'
+        if (*filter == '#') {
+            // According to MQTT spec, '#' must be the absolute last character in the filter
+            return (*(filter + 1) == '\0');
+        }
+
+        // Case 2: Handle single-level wildcard '+'
         if (*filter == '+') {
-            while (*topic && *topic != '/') topic++;
+            // Consume characters from the topic until we hit a level separator '/' or end of string
+            while (*topic && *topic != '/') {
+                topic++;
+            }
             filter++;
-        } else if (*filter == '#') {
-            return true;
-        } else if (*filter == *topic) {
-            filter++;
-            topic++;
-        } else {
+            // Continue the main loop to validate the character right after '+' (usually '/')
+            continue; 
+        }
+
+        // Case 3: Regular character mismatch handling
+        if (*filter != *topic) {
+            // Special MQTT Edge Case: Filter "sport/#" must match the topic "sport"
+            if (*filter == '/' && *(filter + 1) == '#' && *(filter + 2) == '\0' && *topic == '\0') {
+                return true;
+            }
             return false;
         }
+        // Next character in both filter and topic must match
+        filter++;
+        topic++;
     }
-    return (*filter == '\0' && *topic == '\0') || (*filter == '#' && *(filter - 1) == '/');
+
+    // Both filter and topic strings must reach their end simultaneously for a perfect match
+    return (*filter == '\0' && *topic == '\0');
 }
 
-void EmMqttClient::onMessage_(const EmStringBase& topic, const EmStringBase& payload) {
+
+
+void EmMqttClient::onMessage_(const EmStringBase& topic, 
+                              const char* payload, 
+                              size_t payloadLen,
+                              EmMqttPayloadBufferStatus payloadBufferStatus) {
     std::vector<Subscription_*> tempSubs;
     
     {
@@ -173,7 +213,7 @@ void EmMqttClient::onMessage_(const EmStringBase& topic, const EmStringBase& pay
     for (const auto& sub : tempSubs) {
         if (matchTopic_(sub->topicFilter.c_str(), topic.c_str())) {
             if (sub->callback != nullptr) {
-                sub->callback(topic, payload);
+                sub->callback(sub->userData, topic, payload, payloadLen, payloadBufferStatus);
             }
         }
     }
@@ -190,16 +230,50 @@ void EmMqttClient::mqttEventHandler_(void* handler_args, esp_event_base_t base, 
         case MQTT_EVENT_DISCONNECTED:
             self->onDisconnect_();
             break;
-        case MQTT_EVENT_DATA:
+        case MQTT_EVENT_DATA: {
+            // First message data for a topic, initialize the current topic and clear the payload
             if (event->topic_len > 0) {
-                self->m_currentTopic.set(event->topic);
-                self->m_currentPayload.clear();
+                self->m_currentTopic.set(event->topic, event->topic_len);
+                self->m_currentPayloadLen = 0;
             }
-            self->m_currentPayload.append(event->data, event->data_len);
+            // Merge payload data with the topic message (i.e. multi-part handling)
+            size_t dataToCopy = event->data_len;
+            size_t newPayloadLen = self->m_currentPayloadLen + event->data_len;
+            if (newPayloadLen > self->m_payloadBufferCapacity) {
+                // Log once buffer overflow
+                if (self->m_currentPayloadLen <= self->m_payloadBufferCapacity) {
+                    logError<100>("EmMqttClient", "Payload buffer overflow for topic: %s", self->m_currentTopic.c_str());
+                }
+                // Truncate payload to fit buffer
+				if (self->m_payloadBufferCapacity > self->m_currentPayloadLen) {
+					dataToCopy = self->m_payloadBufferCapacity - self->m_currentPayloadLen;
+				} else {
+					dataToCopy = 0;
+				}
+            }
+            // Copy the new payload block if there is space in the buffer
+            if (dataToCopy > 0) {
+                memcpy(self->m_payloadBuffer + self->m_currentPayloadLen, event->data, dataToCopy);
+                // Set a null termination at the end of the payload buffer
+                self->m_payloadBuffer[self->m_currentPayloadLen + dataToCopy] = '\0';
+            }
+            self->m_currentPayloadLen = newPayloadLen;
+            // All message received?
             if (event->current_data_offset + event->data_len >= event->total_data_len) {
-                self->onMessage_(self->m_currentTopic, self->m_currentPayload);
+                // Compute the buffer status for the callback
+                EmMqttPayloadBufferStatus payloadBufferStatus = EmMqttPayloadBufferStatus::notFull;
+                if (self->m_currentPayloadLen == self->m_payloadBufferCapacity) {
+                    payloadBufferStatus = EmMqttPayloadBufferStatus::full;
+                } else if (self->m_currentPayloadLen > self->m_payloadBufferCapacity) {
+                    payloadBufferStatus = EmMqttPayloadBufferStatus::overflow;
+                }
+                // Call the user callback with the complete message
+                self->onMessage_(self->m_currentTopic, 
+                                 self->m_payloadBuffer, 
+                                 self->m_currentPayloadLen,
+                                 payloadBufferStatus);
             }
-            break;
+        } break;
         default:
             break;
     }

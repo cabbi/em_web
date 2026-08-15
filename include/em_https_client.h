@@ -8,6 +8,8 @@
 #include "em_stream.h"
 #include "em_threading.h"
 #include "em_json_writer.h"
+#include "em_optional.h"
+#include "em_flood_guard.h"
 
 // NOTE:
 // To reduce flash memory consumption we disable by default the use of the ESP32 internal certificate bundle.
@@ -17,7 +19,17 @@
 // This is useful for large responses that don't fit in memory and supports Base64 encoded data.
 class EmHttpsRequestStream;
 
+enum class EmHttpsRequestResult : uint8_t {
+    success = 0,         // Request succeeded
+    failed,              // Request failed
+    notInitialized,      // The client was not initialized
+    notConnected,        // The client is not connected
+    otherPendingRequest, // The client is busy with a pending request
+    floodGuardBlock,     // Request to endpoint happened to soon (i.e. endpoint cooldown period did not expire) 
+};
+
 // The EmHttpsClient class provides a simple interface for making HTTPS requests to a server.
+// User can set an endpoint "flood guard"" to avoid publishing too many times (e.g. application bug)
 class EmHttpsClient {
     friend class EmHttpsRequestStream;
 public:    
@@ -25,18 +37,26 @@ public:
     // 'root_ca' is an optional PEM format Root CA certificate string.
     // Defaults to nullptr, which triggers the internal hardware certificate bundle
     // if EM_USE_ESP_CRT_BUNDLE is defined.
-    EmHttpsClient(const char* rootCA) 
+    EmHttpsClient(const char* rootCA = nullptr,
+                  EmFloodGuard& endpointTimeout = noFloodGuard) 
      : m_clientHandle(nullptr), 
        m_rootCA(rootCA),
        m_resBuffer(nullptr),   // response buffer is set on request call, a mutex is used
        m_resBufferSize(0),     // to protect the response buffer from concurrent access
        m_openRequest(false),
        m_gotAllResponse(false),
-       m_isBase64(false) {}
+       m_isBase64(false),
+       m_endpointTimeout(endpointTimeout) {}
     
     virtual ~EmHttpsClient() {
         cleanup_();
     }
+
+    // Rule of Five: Delete copy/move to prevent double instances sharing resources
+    EmHttpsClient(const EmHttpsClient&) = delete;
+    EmHttpsClient& operator=(const EmHttpsClient&) = delete;
+    EmHttpsClient(EmHttpsClient&&) = delete;
+    EmHttpsClient& operator=(EmHttpsClient&&) = delete;
 
     bool init();
 
@@ -44,9 +64,9 @@ public:
         return m_clientHandle != nullptr;
     }
 
-    bool postJson(const char* endpoint, 
-                  const char* cmd,
-                  const char* params) {
+    EmHttpsRequestResult postJson(const char* endpoint, 
+                                  const char* cmd,
+                                  const char* params) {
         EmStringXL request;
         EmJsonDictWriter reqWriter(request);
         reqWriter.addString("cmd", cmd);
@@ -56,20 +76,20 @@ public:
         return postJson(endpoint, request.c_str(), nullptr, 0, gotAllResponse);
     }
 
-    bool postJson(const char* endpoint, 
-                  const char* cmd,
-                  const char* params, 
-                  EmStringBase& response, 
-                  bool& gotAllResponse) {
+    EmHttpsRequestResult postJson(const char* endpoint, 
+                                  const char* cmd,
+                                  const char* params, 
+                                  EmStringBase& response, 
+                                  bool& gotAllResponse) {
         return postJson(endpoint, cmd, params, response.buffer(), response.capacity(), gotAllResponse);
     }
 
-    bool postJson(const char* endpoint, 
-                  const char* cmd,
-                  const char* params, 
-                  char* response, 
-                  size_t responseSize, 
-                  bool& gotAllResponse) {
+    EmHttpsRequestResult postJson(const char* endpoint, 
+                                  const char* cmd,
+                                  const char* params, 
+                                  char* response, 
+                                  size_t responseSize, 
+                                  bool& gotAllResponse) {
         EmStringXL request;
         EmJsonDictWriter reqWriter(request);
         reqWriter.addString("cmd", cmd);
@@ -78,30 +98,30 @@ public:
         return postJson(endpoint, request.c_str(), response, responseSize, gotAllResponse);
     }
 
-    bool postJson(const char* endpoint, const char* jsonPayload, EmStringBase& response, bool& gotAllResponse) {
+    EmHttpsRequestResult postJson(const char* endpoint, const char* jsonPayload, EmStringBase& response, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_POST, jsonPayload, response.buffer(), response.capacity(), true, gotAllResponse);
     }
-    bool postJson(const char* endpoint, const char* jsonPayload, char* response, size_t responseSize, bool& gotAllResponse) {
+    EmHttpsRequestResult postJson(const char* endpoint, const char* jsonPayload, char* response, size_t responseSize, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_POST, jsonPayload, response, responseSize, true, gotAllResponse);
     }
 
-    bool get(const char* endpoint, EmStringBase& response, bool& gotAllResponse) {
+    EmHttpsRequestResult get(const char* endpoint, EmStringBase& response, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_GET, nullptr, response.buffer(), response.capacity(), false, gotAllResponse);
     }
-    bool get(const char* endpoint, char* response, size_t responseSize, bool& gotAllResponse) {
+    EmHttpsRequestResult get(const char* endpoint, char* response, size_t responseSize, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_GET, nullptr, response, responseSize, false, gotAllResponse);
     }
 
 protected:
     static esp_err_t http_event_handler_(esp_http_client_event_t *evt);
     void cleanup_();
-    bool executeRequest_(const char* endpoint, 
-                         esp_http_client_method_t method, 
-                         const char* payload, 
-                         char* response, 
-                         size_t responseSize,
-                         bool isJsonRequest,
-                         bool& gotAllResponse);
+    EmHttpsRequestResult executeRequest_(const char* endpoint, 
+                                         esp_http_client_method_t method, 
+                                         const char* payload, 
+                                         char* response, 
+                                         size_t responseSize,
+                                         bool isJsonRequest,
+                                         bool& gotAllResponse);
 
     void appendResponseData_(const char* data, size_t len) {
         if (m_resBuffer && m_resBufferSize > 0) {
@@ -117,22 +137,22 @@ protected:
     }
 
     // Streamed requests using EmHttpsRequestStream
-    bool beginPostRequest_(const char* endpoint, 
-                           const char* payload, 
-                           EmHttpsRequestStream& resStream) {
+    EmHttpsRequestResult beginPostRequest_(const char* endpoint, 
+                                           const char* payload, 
+                                           EmHttpsRequestStream& resStream) {
         return beginRequest_(endpoint, HTTP_METHOD_POST, payload, resStream);
     }
 
-    bool beginGetRequest_(const char* endpoint, 
-                          const char* payload, 
-                          EmHttpsRequestStream& resStream) {
+    EmHttpsRequestResult beginGetRequest_(const char* endpoint, 
+                                          const char* payload, 
+                                          EmHttpsRequestStream& resStream) {
         return beginRequest_(endpoint, HTTP_METHOD_GET, payload, resStream);
     }
 
-    bool beginRequest_(const char* endpoint, 
-                       esp_http_client_method_t method, 
-                       const char* payload, 
-                       EmHttpsRequestStream& resStream);
+    EmHttpsRequestResult beginRequest_(const char* endpoint, 
+                                       esp_http_client_method_t method, 
+                                       const char* payload, 
+                                       EmHttpsRequestStream& resStream);
 
     void endRequest_();
 
@@ -145,6 +165,7 @@ private:
     ts_bool m_openRequest;
     ts_bool m_gotAllResponse;
     ts_bool m_isBase64;
+    EmFloodGuard& m_endpointTimeout;
 };
 
 // A helper class to manage the lifecycle of a streamed request.
@@ -159,7 +180,7 @@ public:
                          esp_http_client_method_t method, 
                          const char* payload)
         : m_httpsClient(client) {
-        m_isValid = m_httpsClient.beginRequest_(endpoint, method, payload, *this);
+        m_isValid = m_httpsClient.beginRequest_(endpoint, method, payload, *this) == EmHttpsRequestResult::success;
     }
         
     ~EmHttpsRequestStream() {

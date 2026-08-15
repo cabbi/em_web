@@ -10,9 +10,18 @@
 
 #include "em_string.h"
 #include "em_threading.h"
+#include "em_flood_guard.h"
 
 
 using EmMqttStringTopic = EmStringL;
+
+enum class EmMqttPublishResult : uint8_t {
+    success = 0,     // Publish the topic succeeded
+    failed,          // Publishing the topic failed
+    notInitialized,  // The client was not initialized
+    notConnected,    // The client is not connected
+    floodGuardBlock, // Publishing the topic happened to soon (i.e. endpoint cooldown period did not expire) 
+};
 
 enum class EmMqttPayloadBufferStatus : uint8_t {
     notFull  = 0, // Payload fits in the provided buffer
@@ -23,7 +32,9 @@ enum class EmMqttPayloadBufferStatus : uint8_t {
 
 // An MQTT client class that wraps the ESP-IDF MQTT client functionality.
 // The client automatically handles re-connections and allows for multiple topic subscriptions 
-// with individual callbacks. All user subscriptions are automatically restored on re-connection. 
+// with individual callbacks. All user subscriptions are automatically restored on re-connection.
+// User can set an endpoint "flood guard"" to avoid publishing too many times (e.g. application bug)
+// 
 // NOTES:
 //  - The message callback will always set a "\0" (i.e. string null-termination) at the end of the payload
 //    buffer provided by the user. This is done to facilitate the most of the payloads being strings. 
@@ -44,15 +55,28 @@ public:
                                         size_t payloadLen,
                                         EmMqttPayloadBufferStatus payloadBufferStatus);
 
-    EmMqttClient(EmStringBase& payloadBuffer)
-     : m_payloadBuffer(payloadBuffer.buffer()), m_payloadBufferCapacity(payloadBuffer.capacity()) {
-    }
-    EmMqttClient(char* payloadBuffer, size_t payloadBufferSize)
-     : m_payloadBuffer(payloadBuffer), m_payloadBufferCapacity(payloadBufferSize-1) {
-    }
+    EmMqttClient(EmStringBase& payloadBuffer, 
+                 EmFloodGuard& endpointTimeout = noFloodGuard)
+     : m_payloadBuffer(payloadBuffer.buffer()), 
+       m_payloadBufferCapacity(payloadBuffer.capacity()),
+       m_endpointTimeout(endpointTimeout) {}
+    
+    EmMqttClient(char* payloadBuffer, 
+                 size_t payloadBufferSize, 
+                 EmFloodGuard& endpointTimeout = noFloodGuard)
+     : m_payloadBuffer(payloadBuffer), 
+       m_payloadBufferCapacity(payloadBufferSize-1),
+       m_endpointTimeout(endpointTimeout) {}
+
     ~EmMqttClient() {
         disconnect(true);
     }
+
+    // Rule of Five: Delete copy/move to prevent double instances sharing resources
+    EmMqttClient(const EmMqttClient&) = delete;
+    EmMqttClient& operator=(const EmMqttClient&) = delete;
+    EmMqttClient(EmMqttClient&&) = delete;
+    EmMqttClient& operator=(EmMqttClient&&) = delete;
 
     // Connects to the MQTT broker with optional TLS parameters.
     // User can provide callbacks for status detection (i.e. connection and disconnection).
@@ -67,7 +91,7 @@ public:
 
     bool disconnect(bool removeAllSubscriptions);
 
-    bool publish(const char* topic, const char* payload, int qos = 1) const;
+    EmMqttPublishResult publish(const char* topic, const char* payload, int qos = 1) const;
     
     void subscribe(void* userData, 
                    const char* topic, 
@@ -113,6 +137,8 @@ private:
     char* m_payloadBuffer = nullptr;
     size_t m_payloadBufferCapacity = 0;
     size_t m_currentPayloadLen = 0;
+
+    EmFloodGuard& m_endpointTimeout;
 };
 
 #endif

@@ -1,4 +1,5 @@
 #include "em_log.h"
+#include "em_wifi.h"
 #include "em_https_client.h"
 
 #include "mbedtls/base64.h"
@@ -64,17 +65,21 @@ void EmHttpsClient::cleanup_() {
 
 // Note: We no longer pass the stream as a parameter. 
 // We return true if headers are successfully parsed and ready for streaming.
-bool EmHttpsClient::beginRequest_(const char* endpoint, 
-                                  esp_http_client_method_t method, 
-                                  const char* payload, 
-                                  EmHttpsRequestStream& resStream) {
+EmHttpsRequestResult EmHttpsClient::beginRequest_(const char* endpoint, 
+                                                  esp_http_client_method_t method, 
+                                                  const char* payload, 
+                                                  EmHttpsRequestStream& resStream) {
     if (!isInitialized() && !init()) {
-        return false;
-    }                
+        return EmHttpsRequestResult::notInitialized;
+    }
+    
+    if (!EmWiFi::isConnected()) {
+        return EmHttpsRequestResult::notConnected;
+    }
 
     if (m_openRequest) {
         logError("EmHttpsClient", "A request is already open. Call endRequest_() before starting a new one.");
-        return false;
+        return EmHttpsRequestResult::otherPendingRequest;
     }
 
     m_resMutex.lock(); // Lock the mutex to ensure exclusive access to the response stream
@@ -105,7 +110,7 @@ bool EmHttpsClient::beginRequest_(const char* endpoint,
     if (esp_http_client_open(m_clientHandle, payloadLen) != ESP_OK) {
         m_openRequest = false;
         m_resMutex.unlock();
-        return false;
+        return EmHttpsRequestResult::notInitialized;
     }
 
     if (payloadLen > 0) {
@@ -113,7 +118,7 @@ bool EmHttpsClient::beginRequest_(const char* endpoint,
             esp_http_client_close(m_clientHandle);
             m_openRequest = false;
             m_resMutex.unlock();
-            return false;
+            return EmHttpsRequestResult::failed;
         }
     }
 
@@ -123,7 +128,7 @@ bool EmHttpsClient::beginRequest_(const char* endpoint,
         esp_http_client_close(m_clientHandle);
         m_openRequest = false;
         m_resMutex.unlock();
-        return false;
+        return EmHttpsRequestResult::failed;
     }
     
     int status_code = esp_http_client_get_status_code(m_clientHandle);
@@ -132,7 +137,10 @@ bool EmHttpsClient::beginRequest_(const char* endpoint,
     // Hand over the live, open connection pointers directly to the stream object
     resStream.attach_(m_clientHandle, status_code, response_size, m_isBase64);
     
-    return (status_code >= 200 && status_code < 300);
+    if (status_code >= 200 && status_code < 300) {
+        return EmHttpsRequestResult::success;
+    }
+    return EmHttpsRequestResult::failed;
 }
 
 // Separate cleanup routine once the caller finishes reading
@@ -144,7 +152,7 @@ void EmHttpsClient::endRequest_() {
     }                
 }
 
-bool EmHttpsClient::executeRequest_(const char* endpoint, 
+EmHttpsRequestResult EmHttpsClient::executeRequest_(const char* endpoint, 
                                     esp_http_client_method_t method, 
                                     const char* payload, 
                                     char* response, 
@@ -153,8 +161,12 @@ bool EmHttpsClient::executeRequest_(const char* endpoint,
                                     bool& gotAllResponse) {
     if (!isInitialized() && !init()) {
         logError<50>("EmHttpsClient", "Client did not initialize correctly!");
-        return false;
+        return EmHttpsRequestResult::notInitialized;
     }                
+
+    if (!EmWiFi::isConnected()) {
+        return EmHttpsRequestResult::notConnected;
+    }
 
     logDebug<200>("EmHttpsClient", "Executing HTTP request: %s", payload);
 
@@ -197,7 +209,7 @@ bool EmHttpsClient::executeRequest_(const char* endpoint,
     }
 
     gotAllResponse = m_gotAllResponse;
-    return success;
+    return success ? EmHttpsRequestResult::success : EmHttpsRequestResult::failed;
 }
 
 int EmHttpsRequestStream::available() {

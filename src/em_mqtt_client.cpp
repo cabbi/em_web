@@ -68,11 +68,20 @@ bool EmMqttClient::disconnect(bool removeAllSubscriptions) {
     return true;
 }
 
-bool EmMqttClient::publish(const char* topic, const char* payload, int qos) const {
-    if (!m_connected.load() || m_client.load() == nullptr) {
-        return false;
+EmMqttPublishResult EmMqttClient::publish(const char* topic, const char* payload, int qos) const {
+    if (m_client.load() == nullptr) {
+        return EmMqttPublishResult::notInitialized;
     }
-    return (esp_mqtt_client_publish(m_client.load(), topic, payload, 0, qos, 0) >= 0);
+    if (!m_connected.load()) {
+        return EmMqttPublishResult::notConnected;
+    }
+    if (!m_endpointTimeout.canSend(topic)) {
+        return EmMqttPublishResult::floodGuardBlock;
+    }
+    if (esp_mqtt_client_publish(m_client.load(), topic, payload, 0, qos, 0) < 0) {
+        return EmMqttPublishResult::failed;
+    }
+    return EmMqttPublishResult::success;
 }
 
 bool EmMqttClient::isConnected() const {

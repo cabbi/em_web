@@ -116,6 +116,7 @@ struct EmWiFiEventHandler {
 // connecting to the best available network from a pool of credentials.
 class EmWiFi {
 public:
+    EmWiFi() = delete;   
 
     static void init(EmWiFiPsMode psMode = EmWiFiPsMode::none, 
                      EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal);
@@ -218,8 +219,6 @@ public:
     }
     
 private:
-    EmWiFi();   
-
     static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
     static void clearCurrentSsid_() {
         EmMutexLock lock(m_networkMutex);

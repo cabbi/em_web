@@ -159,11 +159,11 @@ int EmBleServer::characteristicAccessCallback_(uint16_t conn, uint16_t attr, str
         case BLE_GATT_ACCESS_OP_READ_CHR: {
             // Lets try to write to a stack buffer to avoid heap allocation for most of the requests
             EmSboBuffer <uint8_t, 64> buf(targetChr->getDataLen());
-            uint16_t actualDataLen = targetChr->executeRead_(buf.getBuffer(), buf.getSize());
+            uint16_t actualDataLen = targetChr->executeRead_(buf.getBuffer(), buf.getMaxSize());
             
-            if (actualDataLen > buf.getSize()) {
+            if (actualDataLen > buf.getMaxSize()) {
                 ESP_LOGE("EmBleServer", "CRITICAL OVERFLOW Gating applied on characteristic read sequence!");
-                actualDataLen = buf.getSize();
+                actualDataLen = buf.getMaxSize();
             }
             
             if (actualDataLen > 0) {

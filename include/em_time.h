@@ -15,8 +15,7 @@
 #include "em_duration.h"
 #include "em_wifi.h"
 
-using EmEpochTypeSec = uint32_t;
-using EmEpochTypeMilli = uint64_t;
+using EmEpochAsMillisec = uint64_t;
 
 // EmTime class for handling time-related operations.
 // Class has only static methods since it cannot have multiple instances.
@@ -46,18 +45,18 @@ public:
     }
 
     // Get the current time in seconds since epoch
-    static bool now(EmEpochTypeSec& currentTime) {
+    static bool now(EmEpoch32& currentTime) {
         if (isInitialized()) {
-            currentTime = static_cast<EmEpochTypeSec>(time(nullptr));
+            currentTime.value = static_cast<uint32_t>(time(nullptr));
             return true;
         }
         return false;
     }
 
     // Get the current time in milliseconds since epoch
-    static bool nowMs(EmEpochTypeMilli& currentTimeMs) {
+    static bool nowMs(EmEpochAsMillisec& currentTimeMs) {
         if (isInitialized()) {
-            currentTimeMs = static_cast<EmEpochTypeMilli>(time(nullptr) * 1000);
+            currentTimeMs = static_cast<EmEpochAsMillisec>(time(nullptr) * 1000);
             return true;
         }
         return false;

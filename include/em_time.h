@@ -10,12 +10,11 @@
 #include <esp_sntp.h>
 
 #include "em_log.h"
+#include "em_epoch.h"
 #include "em_timeout.h"
 #include "em_threading.h"
 #include "em_duration.h"
 #include "em_wifi.h"
-
-using EmEpochAsMillisec = uint64_t;
 
 // EmTime class for handling time-related operations.
 // Class has only static methods since it cannot have multiple instances.
@@ -45,9 +44,10 @@ public:
     }
 
     // Get the current time in seconds since epoch
-    static bool now(EmEpoch32& currentTime) {
+    template<typename T>
+    static bool now(EmEpoch<T>& currentTime) {
         if (isInitialized()) {
-            currentTime.value = static_cast<uint32_t>(time(nullptr));
+            currentTime.value = static_cast<T>(time(nullptr));
             return true;
         }
         return false;
@@ -56,7 +56,7 @@ public:
     // Get the current time in milliseconds since epoch
     static bool nowMs(EmEpochAsMillisec& currentTimeMs) {
         if (isInitialized()) {
-            currentTimeMs = static_cast<EmEpochAsMillisec>(time(nullptr) * 1000);
+            currentTimeMs = EmEpochAsMillisec(time(nullptr) * 1000);
             return true;
         }
         return false;

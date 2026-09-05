@@ -45,7 +45,7 @@ public:
 
     // Get the current time in seconds since epoch
     template<typename T>
-    static bool now(EmEpoch<T>& currentTime) {
+    static bool now(EmEpochBase<T>& currentTime) {
         if (isInitialized()) {
             currentTime.value = static_cast<T>(time(nullptr));
             return true;

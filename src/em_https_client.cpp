@@ -38,6 +38,7 @@ esp_err_t EmHttpsClient::http_event_handler_(esp_http_client_event_t *evt) {
         return ESP_OK;
     }        
     if (evt->event_id == HTTP_EVENT_ON_HEADER) {
+        instance->m_gotAllResponse = false;
         // This fires internally DURING esp_http_client_fetch_headers()
         if (strcasecmp(evt->header_key, "Content-Transfer-Encoding") == 0) {
             if (strcasecmp(evt->header_value, "base64") == 0) {
@@ -52,6 +53,10 @@ esp_err_t EmHttpsClient::http_event_handler_(esp_http_client_event_t *evt) {
     } else        
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
         instance->appendResponseData_(static_cast<const char*>(evt->data), evt->data_len);
+    } else
+    if (evt->event_id == HTTP_EVENT_ON_FINISH) {
+        instance->m_gotAllResponse = true;
+        logDebug("EmHttpsClient", "HTTP response fully received!");
     }
     return ESP_OK;
 }
@@ -63,8 +68,6 @@ void EmHttpsClient::cleanup_() {
     }
 }
 
-// Note: We no longer pass the stream as a parameter. 
-// We return true if headers are successfully parsed and ready for streaming.
 EmHttpsRequestResult EmHttpsClient::beginRequest_(const char* endpoint, 
                                                   esp_http_client_method_t method, 
                                                   const char* payload, 
@@ -171,9 +174,10 @@ EmHttpsRequestResult EmHttpsClient::executeRequest_(const char* endpoint,
     logDebug<200>("EmHttpsClient", "Executing HTTP request: %s", payload);
 
     EmMutexLock lock(m_resMutex);
-    m_resBuffer = response; 
-    m_resBufferSize = responseSize;
-    m_gotAllResponse = true;
+    m_resBuf = response; 
+    m_resBufSize = responseSize;
+    m_resBufCurrentPos = 0;
+    m_gotAllResponse = false;
 
     // Prepare new request
     esp_http_client_set_url(m_clientHandle, endpoint);
@@ -350,14 +354,14 @@ size_t EmHttpsRequestStream::read(uint8_t* buffer, size_t length) {
             }
         }
         
-        // Accurate remaining string math correction
+        // Remaining bytes computation
         if (m_availableBytes >= (int)totalBytesWrittenToCaller) {
             m_availableBytes -= totalBytesWrittenToCaller;
         } else {
             m_availableBytes = 0;
         }
     } 
-    else {
+    else { // Raw bytes (no base 64 encoding!)
         if (length > 0) {
             int res = esp_http_client_read(m_espClient, (char*)(buffer + totalBytesWrittenToCaller), length);
             if (res > 0) {

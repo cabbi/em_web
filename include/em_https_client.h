@@ -41,8 +41,9 @@ public:
                   EmFloodGuard& endpointTimeout = noFloodGuard) 
      : m_clientHandle(nullptr), 
        m_rootCA(rootCA),
-       m_resBuffer(nullptr),   // response buffer is set on request call, a mutex is used
-       m_resBufferSize(0),     // to protect the response buffer from concurrent access
+       m_resBuf(nullptr),   // response buffer is set on request call, a mutex is used
+       m_resBufSize(0),     // to protect the response buffer from concurrent access
+       m_resBufCurrentPos(0),
        m_openRequest(false),
        m_gotAllResponse(false),
        m_isBase64(false),
@@ -99,14 +100,14 @@ public:
     }
 
     EmHttpsRequestResult postJson(const char* endpoint, const char* jsonPayload, EmStringBase& response, bool& gotAllResponse) {
-        return executeRequest_(endpoint, HTTP_METHOD_POST, jsonPayload, response.buffer(), response.capacity(), true, gotAllResponse);
+        return executeRequest_(endpoint, HTTP_METHOD_POST, jsonPayload, response.buffer(), response.capacity()+1, true, gotAllResponse);
     }
     EmHttpsRequestResult postJson(const char* endpoint, const char* jsonPayload, char* response, size_t responseSize, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_POST, jsonPayload, response, responseSize, true, gotAllResponse);
     }
 
     EmHttpsRequestResult get(const char* endpoint, EmStringBase& response, bool& gotAllResponse) {
-        return executeRequest_(endpoint, HTTP_METHOD_GET, nullptr, response.buffer(), response.capacity(), false, gotAllResponse);
+        return executeRequest_(endpoint, HTTP_METHOD_GET, nullptr, response.buffer(), response.capacity()+1, false, gotAllResponse);
     }
     EmHttpsRequestResult get(const char* endpoint, char* response, size_t responseSize, bool& gotAllResponse) {
         return executeRequest_(endpoint, HTTP_METHOD_GET, nullptr, response, responseSize, false, gotAllResponse);
@@ -124,15 +125,15 @@ protected:
                                          bool& gotAllResponse);
 
     void appendResponseData_(const char* data, size_t len) {
-        if (m_resBuffer && m_resBufferSize > 0) {
-            size_t currentLen = strlen(m_resBuffer);
-            size_t spaceLeft = m_resBufferSize - currentLen - 1; // -1 for null terminator
+        if (m_resBuf && m_resBufSize > 0) {
+            size_t spaceLeft = m_resBufSize - m_resBufCurrentPos - 1; // -1 for null terminator
             size_t toCopy = (len < spaceLeft) ? len : spaceLeft;
-            m_gotAllResponse = spaceLeft >= len;
             if (toCopy > 0) {
-                strncat(m_resBuffer, data, toCopy);
+                memcpy(&m_resBuf[m_resBufCurrentPos], data, toCopy);
+                m_resBufCurrentPos += toCopy;
+                m_resBuf[m_resBufCurrentPos] = 0; // Null terminating string (useless for binaries)
             }
-            logInfo<100>("EmHttpsClient", "--->%s [len=%zu, spaceLeft=%zu, gotAllResponse=%s]", m_resBuffer, len, spaceLeft, m_gotAllResponse ? "true" : "false");
+            logDebug<100>("EmHttpsClient", "...incoming data - len=%zu - spaceLeft=%zu]", len, spaceLeft);
         }
     }
 
@@ -160,8 +161,9 @@ private:
     esp_http_client_handle_t m_clientHandle;
     const char* m_rootCA;
     EmMutex m_resMutex;
-    char* m_resBuffer;
-    size_t m_resBufferSize;
+    char* m_resBuf;
+    size_t m_resBufSize;
+    size_t m_resBufCurrentPos;
     ts_bool m_openRequest;
     ts_bool m_gotAllResponse;
     ts_bool m_isBase64;

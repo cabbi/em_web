@@ -224,9 +224,12 @@ private:
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.clear();
     }
-    static void setCurrentSsid_(const EmStringS& ssid) {
+    static void setCurrentSsid_(const char* ssid) {
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.set(ssid);
+    }
+    static void setCurrentSsid_(const EmStringS& ssid) {
+        setCurrentSsid_(ssid.c_str());
     }
     static void getCurrentSsid_(EmStringS& ssid) {
         EmMutexLock lock(m_networkMutex);

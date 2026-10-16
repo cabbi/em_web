@@ -118,8 +118,9 @@ class EmWiFi {
 public:
     EmWiFi() = delete;   
 
-    static void init(EmWiFiPsMode psMode = EmWiFiPsMode::none, 
-                     EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal);
+    static void init(EmWiFiPsMode powerSaveMode=EmWiFiPsMode::none, 
+                     EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal,
+                     const char* hostname=nullptr);
 
     static bool switchAntenna(EmWiFiAntennaType antennaType);
 
@@ -218,7 +219,7 @@ public:
         return ::getWiFiLevelName(getWiFiLevel());
     }
     
-private:
+protected:
     static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
     static void clearCurrentSsid_() {
         EmMutexLock lock(m_networkMutex);

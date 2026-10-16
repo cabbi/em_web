@@ -11,16 +11,20 @@
 #endif
 
 bool EmWiFi::switchAntenna(EmWiFiAntennaType antennaType) {
-#ifdef EM_XIAO_C6  
+#if defined(ARDUINO_SEEED_XIAO_ESP32C6) || defined(EM_XIAO_C6)
     pinMode(XIAO_WIFI_ANT_CONFIG, OUTPUT);
     digitalWrite(XIAO_WIFI_ANT_CONFIG, antennaType == EmWiFiAntennaType::internal ? 0 : 1);
     tDelay(50, true);
     return true;
+#elif defined(ARDUINO_SEEED_XIAO_ESP32S3) || defined(EM_XIAO_S3)
+    return (antennaType == EmWiFiAntennaType::external);
 #endif
     return false;
 }
 
-void EmWiFi::init(EmWiFiPsMode psMode, EmWiFiAntennaType antennaType) {
+void EmWiFi::init(EmWiFiPsMode powerSaveMode, 
+                  EmWiFiAntennaType antennaType,
+                  const char* hostname) {
     EmMutexLock lock(m_initMutex);
     if (m_netif != nullptr) {
         // already initialized!
@@ -44,21 +48,24 @@ void EmWiFi::init(EmWiFiPsMode psMode, EmWiFiAntennaType antennaType) {
     // Configure and start the Idf WiFi handling
     m_netif = esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&cfg);
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    esp_event_handler_instance_register(WIFI_EVENT,
-                                        ESP_EVENT_ANY_ID,
-                                        &EmWiFi::eventHandler_,
-                                        nullptr,
-                                        nullptr);
-    esp_event_handler_instance_register(IP_EVENT,
-                                        IP_EVENT_STA_GOT_IP,
-                                        &EmWiFi::eventHandler_,
-                                        nullptr,
-                                        nullptr);
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_set_ps(static_cast<wifi_ps_type_t>(psMode));
-    esp_wifi_start();
+    if (hostname) {
+        esp_netif_set_hostname(m_netif, hostname); 
+    }
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &EmWiFi::eventHandler_,
+                                                        nullptr,
+                                                        nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &EmWiFi::eventHandler_,
+                                                        nullptr,
+                                                        nullptr));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(static_cast<wifi_ps_type_t>(powerSaveMode)));
+    ESP_ERROR_CHECK(esp_wifi_start());
 }
 
 bool EmWiFi::addAP(const char* ssid, const char* passphrase) {

@@ -56,6 +56,8 @@ bool EmTime::setup_(const char* tz,
         return false;
     }
     s_isInitialized = true;
+    // Setup timezone
+    setTimeZone(tz);
     // Initialize time handling
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     if (ntpServer1 != nullptr) {

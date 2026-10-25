@@ -43,9 +43,14 @@ public:
         return s_isInitialized;
     }
 
-    // Get the current time in seconds since epoch
+    static void setTimeZone(const char* tz) {
+        setenv("TZ", tz == nullptr ? "" : tz , 1);
+        tzset();
+    }
+
+    // Get the current utc time in seconds since epoch
     template<typename T>
-    static bool now(EmEpochBase<T>& currentTime) {
+    static bool nowUtc(EmEpochBase<T>& currentTime) {
         if (isInitialized()) {
             currentTime.value = static_cast<T>(time(nullptr));
             return true;
@@ -53,17 +58,54 @@ public:
         return false;
     }
 
-    // Get the current time in milliseconds since epoch
-    static bool nowMs(EmEpochAsMillisec& currentTimeMs) {
+    // Get the current utc time in milliseconds since epoch
+    static bool nowUtcMs(EmEpochAsMillisec& currentTimeMs) {
         if (isInitialized()) {
             currentTimeMs = EmEpochAsMillisec(time(nullptr) * 1000);
             return true;
         }
         return false;
     }
+
+    // Get the current local time in seconds since epoch
+    template<typename T>
+    static bool nowLocal(EmEpochBase<T>& currentTime) {
+        if (isInitialized()) {
+            time_t now;
+            struct tm tm;
+            time(&now);
+            localtime_r(&now, &tm);
+            currentTime.value = static_cast<T>(mktime(&tm));
+            return true;
+        }
+        return false;
+    }
+
+    // Get the current local time in milliseconds since epoch
+    static bool nowLocalMs(EmEpochAsMillisec& currentTimeMs) {
+        if (isInitialized()) {
+            time_t now;
+            struct tm tm;
+            time(&now);
+            localtime_r(&now, &tm);
+            currentTimeMs = EmEpochAsMillisec(mktime(&tm) * 1000);
+            return true;
+        }
+        return false;
+    }
     
-    // Get the current time as a struct tm
-    static bool getTime(struct tm& timeinfo) {
+    // Get the current local time as a struct tm based on set timezone (if any)
+    static bool getUtcTime(struct tm& timeinfo) {
+        if (isInitialized()) {
+            time_t now = time(nullptr);
+            gmtime_r(&now, &timeinfo);
+            return true;
+        }
+        return false;
+    }
+
+    // Get the current local time as a struct tm based on set timezone (if any)
+    static bool getLocalTime(struct tm& timeinfo) {
         if (isInitialized()) {
             time_t now = time(nullptr);
             localtime_r(&now, &timeinfo);

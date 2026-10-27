@@ -14,10 +14,10 @@ bool EmTime::begin(const EmDuration& initTimeout,
 
     // Waiting loop... note that s_isInitialized is set in the callback 
     EmTimeout timeout(initTimeout);
-    while (!s_isInitialized && !timeout.isExpired()) {
+    while (!isInitialized() && !timeout.isExpired()) {
         tDelay(100, true);
     }    
-    return s_isInitialized;
+    return isInitialized();
 }
 
 bool EmTime::begin(const char* tz,
@@ -51,11 +51,10 @@ bool EmTime::setup_(const char* tz,
                     const char* ntpServer2,
                     const char* ntpServer3) {
     // already stared?
-    if (s_isInitialized) {
-        logWarning("EmTime", "EmTime already initialized!");
+    if (isStarted()) {
+        logWarning("EmTime", "EmTime already started!");
         return false;
     }
-    s_isInitialized = true;
     // Setup timezone
     setTimeZone(tz);
     // Initialize time handling
@@ -74,12 +73,12 @@ bool EmTime::setup_(const char* tz,
 }
 
 bool EmTime::start_() {
-    if (s_isStarted) {
+    if (isStarted()) {
         logWarning("EmTime", "EmTime already started!");
         return false;
     }
     esp_sntp_init();
-    s_isStarted = true;
+    s_isStarted.store(true);
     logInfo("EmTime", "Time handler started. Waiting for NTP sync...");
     return true;
 }

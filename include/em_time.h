@@ -36,11 +36,11 @@ public:
                       const char* ntpServer3 = nullptr);
 
     static bool isStarted() {
-        return s_isStarted;
+        return s_isStarted.load();
     }
 
     static bool isInitialized() {
-        return s_isInitialized;
+        return s_isInitialized.load();
     }
 
     static void setTimeZone(const char* tz) {
@@ -127,7 +127,16 @@ private:
                        const char* ntpServer3 = nullptr);
     static bool start_();
     static void timeSyncNotificationCallback_(struct timeval *tv) {
-        s_isInitialized = true;
+        // Checking for a valid year as well since some other sw components might have set the time
+        time_t now = tv->tv_sec;
+        struct tm t;
+        gmtime_r(&now, &t);
+        if (t.tm_year > 120 && sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+            logInfo<100>("EmTime", "Time set to: %d-%02d-%02d %02d:%02d:%02d", 
+                          t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                          t.tm_hour, t.tm_min, t.tm_sec);
+            s_isInitialized.store(true);
+        }
     }
     
     static EmWiFiEventResult wifiEventCallback_(void* userArg, EmWiFiEventType event);

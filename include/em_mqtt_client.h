@@ -69,7 +69,7 @@ public:
        m_endpointTimeout(endpointTimeout) {}
 
     ~EmMqttClient() {
-        disconnect(true);
+        close(true);
     }
 
     // Rule of Five: Delete copy/move to prevent double instances sharing resources
@@ -78,29 +78,50 @@ public:
     EmMqttClient(EmMqttClient&&) = delete;
     EmMqttClient& operator=(EmMqttClient&&) = delete;
 
-    // Connects to the MQTT broker with optional TLS parameters.
+    // Initialize a MQTT broker connection handler with optional TLS parameters.
+    // The client will automatically connect to the broker once internet connection is available
+    // and will automatically re-connect if the connection is lost.
     // User can provide callbacks for status detection (i.e. connection and disconnection).
     // If 'root_ca' is provided, it will be used for server certificate verification.
-    bool connect(const char* endpoint, 
-                 uint16_t port = 8883,
-                 EmMqttOnStatusChangedCallback statusChangedCallback = nullptr, 
-                 const char* root_ca = nullptr, 
-                 const char* client_cert = nullptr, 
-                 const char* client_key = nullptr,
-                 int keepaliveSec = 120);
+    bool init(const char* endpoint, 
+              uint16_t port = 8883,
+              EmMqttOnStatusChangedCallback statusChangedCallback = nullptr, 
+              const char* root_ca = nullptr, 
+              const char* client_cert = nullptr, 
+              const char* client_key = nullptr,
+              int keepaliveSec = 120);
 
-    bool disconnect(bool removeAllSubscriptions);
+    // Close the MQTT broker connection handler and optionally remove all subscriptions.
+    // The client will automatically disconnect from the broker and free all resources.
+    bool close(bool removeAllSubscriptions);
 
+    // Publishes a message to the specified topic with the given payload and QoS level.    
     EmMqttPublishResult publish(const char* topic, const char* payload, int qos = 1) const;
     
+    // Subscribes to a topic with the specified callback and QoS level.
     void subscribe(void* userData, 
                    const char* topic, 
                    EmMqttOnMsgCallback msgCallback, 
                    int qos = 1);
+    // Unsubscribes from a topic.
     bool unsubscribe(const char* topic);
+    
+    // Unsubscribes from all topics.
     void unsubscribeAll();
 
+    // Checks if the client is initialized.
+    bool isInitialized() const {
+        return m_client.load() != nullptr;
+    }
+    bool isNotInitialized() const {
+        return !isInitialized();
+    }
+
+    // Checks if the client is currently connected to the MQTT broker.
     bool isConnected() const;
+    bool isNotConnected() const {
+        return !isConnected();
+    }
 
 protected:
     struct Subscription_ {

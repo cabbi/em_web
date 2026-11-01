@@ -1,13 +1,13 @@
 #include "em_log.h"
 #include "em_mqtt_client.h"
 
-bool EmMqttClient::connect(const char* endpoint,
-                           uint16_t port,
-                           EmMqttOnStatusChangedCallback statusChangedCallback, 
-                           const char* root_ca, 
-                           const char* client_cert, 
-                           const char* client_key,
-                           int keepaliveSec) {
+bool EmMqttClient::init(const char* endpoint,
+                        uint16_t port,
+                        EmMqttOnStatusChangedCallback statusChangedCallback, 
+                        const char* root_ca, 
+                        const char* client_cert, 
+                        const char* client_key,
+                        int keepaliveSec) {
     m_statusChangedCallback = statusChangedCallback;
 
     esp_mqtt_client_config_t mqtt_cfg = {};
@@ -49,7 +49,7 @@ bool EmMqttClient::connect(const char* endpoint,
     return true;
 }
 
-bool EmMqttClient::disconnect(bool removeAllSubscriptions) {
+bool EmMqttClient::close(bool removeAllSubscriptions) {
     // First lets remove subscriptions if requested
     if (removeAllSubscriptions) {
         unsubscribeAll();

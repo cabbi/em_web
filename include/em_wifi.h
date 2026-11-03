@@ -9,8 +9,10 @@
 
 #include "em_log.h"
 #include "em_string.h"
+#include "em_timeout.h"
 #include "em_duration.h"
 #include "em_threading.h"
+#include "em_net.h"
 
 
 enum class EmWiFiLevel: uint8_t {
@@ -63,8 +65,19 @@ struct EmWiFiCredential {
         return ssid.isEmpty();
     }
 
+    // True if the WiFi credential is connectable 
+    // (i.e. if it doesn't have internet connection issues already detected in previous connection) 
+    bool isConnectable() const {
+        return noInternetTimeout.isExpired();
+    }
+
+    bool checkInternetConnection(EmNetInternetCheckType checkType);
+
     EmStringS ssid;
     EmStringS password;
+    // Used in case this wifi ssid is connected but has no internet connection
+    // If this timeout is not expired, the connection loop will not try to connect to another APs
+    EmTimeout noInternetTimeout = EmTimeout(EmDuration(0, 5, 0), true); // 5 minutes, elapsed
 };
 
 
@@ -120,7 +133,8 @@ public:
 
     static void init(EmWiFiPsMode powerSaveMode=EmWiFiPsMode::none, 
                      EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal,
-                     const char* hostname=nullptr);
+                     const char* hostname=nullptr,
+                     EmNetInternetCheckType internetCheckType=EmNetInternetCheckType::udp);
 
     static bool switchAntenna(EmWiFiAntennaType antennaType);
 
@@ -134,6 +148,7 @@ public:
         EmMutexLock lock(m_networkMutex);
         m_networks.clear();
         m_currentSsid.clear();
+        m_pCurrentCredential = nullptr;
     }
     
     // Returns the number of defined APs
@@ -221,24 +236,37 @@ public:
     
 protected:
     static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
-    static void clearCurrentSsid_() {
+    static void clearCurrentCredential_() {
         EmMutexLock lock(m_networkMutex);
+        m_pCurrentCredential = nullptr;
         m_currentSsid.clear();
+    }
+    static void setCurrentCredential_(EmWiFiCredential& credential) {
+        EmMutexLock lock(m_networkMutex);
+        m_pCurrentCredential = &credential;
+        m_currentSsid.set(credential.ssid);
+    }
+    static bool getCurrentCredential_(EmWiFiCredential*& credential) {
+        EmMutexLock lock(m_networkMutex);
+        credential = m_pCurrentCredential;
+        return credential != nullptr;
+    }
+    static bool isCurrentCredential_(const EmWiFiCredential& credential) {
+        EmMutexLock lock(m_networkMutex);
+        return m_pCurrentCredential == &credential;
+    }
+
+    static bool getCurrentSsid_(EmStringBase& ssid) {
+        EmMutexLock lock(m_networkMutex);
+        if (m_currentSsid.isNotEmpty()) {
+            ssid.set(m_currentSsid);
+            return true;
+        }
+        return false;
     }
     static void setCurrentSsid_(const char* ssid) {
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.set(ssid);
-    }
-    static void setCurrentSsid_(const EmStringS& ssid) {
-        setCurrentSsid_(ssid.c_str());
-    }
-    static void getCurrentSsid_(EmStringS& ssid) {
-        EmMutexLock lock(m_networkMutex);
-        ssid.set(m_currentSsid);
-    }
-    static bool isCurrentSsid_(const EmStringS& ssid) {
-        EmMutexLock lock(m_networkMutex);
-        return m_currentSsid == ssid;
     }
 
     static void raiseEvent_(EmWiFiEventType type) {
@@ -258,7 +286,8 @@ protected:
 
     inline static EmMutex m_initMutex;
     inline static esp_netif_t* m_netif = nullptr;
-    inline static EmStringS m_currentSsid;
+    inline static EmStringS m_currentSsid; // Needed in case of direct user connect(...) call!
+    inline static EmWiFiCredential* m_pCurrentCredential = nullptr;
 
     inline static EmMutex m_networkMutex;
     inline static std::vector<EmWiFiCredential> m_networks;
@@ -270,6 +299,7 @@ protected:
     inline static std::atomic<uint16_t> m_checkIntervalSec = 0;
     inline static std::atomic<EmWiFiLevel> m_checkLevel = EmWiFiLevel::notConnected;
     inline static std::atomic<bool> m_connected = false;
+    inline static EmNetInternetCheckType m_internetCheckType = EmNetInternetCheckType::udp;
 };
 
 #endif

@@ -48,16 +48,19 @@ public:
     // This method is faster than TCP and consumes less data since it does not require a handshake.
     // Some networks might block UDP port, in case use the TCP version.
     static bool checkInternetConnectionUDP() {
-        struct addrinfo hints;
-        struct addrinfo *res;
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;   
-        hints.ai_socktype = SOCK_DGRAM;  // UDP (avoid TCP handshake)    
-        if (getaddrinfo("://google.com", NULL, &hints, &res) == 0) {
-            freeaddrinfo(res);
-            return true;
-        } 
-        return false;
+        int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+        if (sock < 0) {
+            return false; 
+        }
+        struct sockaddr_in serv_addr;
+        memset(&serv_addr, 0, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = PP_HTONS(53);         
+        serv_addr.sin_addr.s_addr = ipaddr_addr("8.8.8.8");
+        int res = lwip_connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+        lwip_close(sock);
+       
+        return res == 0;
     }
 
     // Checks the internet connection via TCP.

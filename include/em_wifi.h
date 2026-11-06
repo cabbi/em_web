@@ -45,19 +45,43 @@ inline const char* getWiFiLevelName(EmWiFiLevel level) {
     return "Unknown";
 }
 
+// WiFi credential structure.
+// The optional 'keepMeThreshold' is used to determine if the current connection 
+// should be kept or if the system should try to connect to another APs.
+// The use-case (which is mine real one) is when some APs might not have weak/intermittent 
+// signal but others are connection with few data/moth plan (e.g. IoT SIMs).
+// Setting it to 'EmWiFiLevel::notConnected' will always try to connect to another AP.
+// The 'noInternetFreezeTimeout' is used to avoid trying to connect to an AP that has no internet connection.
 struct EmWiFiCredential {
     EmWiFiCredential() {}
-    EmWiFiCredential(const char* ssid_val, const char* pwd_val)
-     : ssid(ssid_val), password(pwd_val) {}
+    EmWiFiCredential(const char* ssid, 
+                     const char* pwd)
+     : ssid(ssid), password(pwd) {}
+    EmWiFiCredential(const char* ssid, 
+                     const char* pwd,
+                     EmWiFiLevel keepMeThreshold)
+     : ssid(ssid), password(pwd), 
+       keepMeThreshold(keepMeThreshold) {}
+    EmWiFiCredential(const char* ssid, 
+                     const char* pwd,
+                     EmWiFiLevel keepMeThreshold,
+                     EmDuration noInternetFreeze)
+     : ssid(ssid), password(pwd), 
+       keepMeThreshold(keepMeThreshold), 
+       noInternetFreezeTimeout(noInternetFreeze) {}
 
     EmWiFiCredential(const EmWiFiCredential& other) {
         ssid.set(other.ssid);
         password.set(other.password);
+        keepMeThreshold = other.keepMeThreshold;
+        noInternetFreezeTimeout = other.noInternetFreezeTimeout;
     }
     
     EmWiFiCredential& operator=(const EmWiFiCredential& other) {
         ssid.set(other.ssid); 
         password.set(other.password);
+        keepMeThreshold = other.keepMeThreshold;
+        noInternetFreezeTimeout = other.noInternetFreezeTimeout;
         return *this;
     }
 
@@ -68,16 +92,26 @@ struct EmWiFiCredential {
     // True if the WiFi credential is connectable 
     // (i.e. if it doesn't have internet connection issues already detected in previous connection) 
     bool isConnectable() const {
-        return noInternetTimeout.isExpired();
+        return noInternetFreezeTimeout.isExpired();
+    }
+
+    bool keepMe() const;
+    bool keepMe(int rssi) const {
+        if (keepMeThreshold == EmWiFiLevel::notConnected) {
+            return false;
+        }
+        return getWiFiLevel(rssi) >= keepMeThreshold;
     }
 
     bool checkInternetConnection(EmNetInternetCheckType checkType);
 
     EmStringS ssid;
     EmStringS password;
-    // Used in case this wifi ssid is connected but has no internet connection
+    // If the current connection level is equal or above this threshold, 
+    // keep the connection and don't try to connect to another APs
+    EmWiFiLevel keepMeThreshold = EmWiFiLevel::notConnected;
     // If this timeout is not expired, the connection loop will not try to connect to another APs
-    EmTimeout noInternetTimeout = EmTimeout(EmDuration(0, 5, 0), true); // 5 minutes, elapsed
+    EmTimeout noInternetFreezeTimeout = EmTimeout(EmDuration(0, 5, 0), true); // 5 minutes, elapsed
 };
 
 
@@ -134,7 +168,8 @@ public:
     static void init(EmWiFiPsMode powerSaveMode=EmWiFiPsMode::none, 
                      EmWiFiAntennaType antennaType=EmWiFiAntennaType::internal,
                      const char* hostname=nullptr,
-                     EmNetInternetCheckType internetCheckType=EmNetInternetCheckType::udp);
+                     EmNetInternetCheckType internetCheckType=EmNetInternetCheckType::udp,
+                     EmDuration internetCheckTimeout=EmDuration(0, 5, 0)); // 5 minutes
 
     static bool switchAntenna(EmWiFiAntennaType antennaType);
 
@@ -204,11 +239,28 @@ public:
         return !EmWiFi::isConnected();
     }
 
+    static bool hasInternetConnection() {
+        if (m_internetCheckTimeout.isExpired(true)) {
+            m_hasInternetConnection = EmNet::checkInternetConnection(m_internetCheckType);
+        }
+EmStringS ssid; // CABBI 
+getCurrentSsid_(ssid);
+logInfo<100>("EmWiFi", "AP '%s' has%s internet connection!", 
+ssid.c_str(),
+m_hasInternetConnection ? "" : " NO"); 
+        return m_hasInternetConnection;
+    }
+
+    static bool hasNoInternetConnection() {
+        return !hasInternetConnection();
+    }
+
     static const char* getSsid(EmStringS& ssid) {
         getCurrentSsid_(ssid);
         return ssid.c_str();
     }   
 
+    // Returns 0 if not conected of the negative RSSI db value of the current connection.
     static int8_t getRssi() {
         if (!EmWiFi::isConnected()) {
             return 0;
@@ -236,6 +288,10 @@ public:
     
 protected:
     static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
+    static void startApConnectionLoop_() {
+        // Notify the connection loop to check for another AP immediately
+        xTaskNotifyGive(EmWiFi::m_taskHandle); 
+    }
     static void clearCurrentCredential_() {
         EmMutexLock lock(m_networkMutex);
         m_pCurrentCredential = nullptr;
@@ -299,7 +355,12 @@ protected:
     inline static std::atomic<uint16_t> m_checkIntervalSec = 0;
     inline static std::atomic<EmWiFiLevel> m_checkLevel = EmWiFiLevel::notConnected;
     inline static std::atomic<bool> m_connected = false;
+    inline static std::atomic<bool> m_hasInternetConnection = false;
+    inline static EmTimeout m_internetCheckTimeout = EmTimeout(EmDuration(0, 5, 0), true);  // % minutes to check for internet connection
     inline static EmNetInternetCheckType m_internetCheckType = EmNetInternetCheckType::udp;
 };
+
+inline bool EmWiFiCredential::keepMe() const { return keepMe(EmWiFi::getRssi()); }
+
 
 #endif

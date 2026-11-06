@@ -17,12 +17,14 @@ bool EmWiFiCredential::checkInternetConnection(EmNetInternetCheckType connectTyp
     }   
     if (EmNet::checkInternetConnection(connectType)) {
         // This AP has internet connection!
-        noInternetTimeout.setExpired();
+        noInternetFreezeTimeout.setExpired();
+logInfo<100>("EmWiFi", "AP '%s' has internet connection!", ssid.c_str());  // CABBI
         return true;
     }
     // No internet connection, lets mark this AP as not connectable for  
     // a while to avoid trying to connect to it again and again
-    noInternetTimeout.restart();
+logInfo<100>("EmWiFi", "AP '%s' has NO internet connection!", ssid.c_str()); // CABBI 
+    noInternetFreezeTimeout.restart();
     return false;
 }
 
@@ -42,14 +44,16 @@ bool EmWiFi::switchAntenna(EmWiFiAntennaType antennaType) {
 void EmWiFi::init(EmWiFiPsMode powerSaveMode, 
                   EmWiFiAntennaType antennaType,
                   const char* hostname,
-                  EmNetInternetCheckType internetCheckType) {
+                  EmNetInternetCheckType internetCheckType,
+                  EmDuration internetCheckTimeout) {
     EmMutexLock lock(m_initMutex);
     m_internetCheckType = internetCheckType;
+    m_internetCheckTimeout = EmTimeout(internetCheckTimeout, true);
     if (m_netif != nullptr) {
         // already initialized!
         return;
     }
-    logDebug("EmWiFi", "Initializing WiFi...");
+    logInfo("EmWiFi", "Initializing WiFi...");
 
 #ifdef EM_XIAO_C6
     pinMode(XIAO_WIFI_ENABLE, OUTPUT);
@@ -99,7 +103,7 @@ bool EmWiFi::startConnectionLoop(uint16_t checkIntervalSec, EmWiFiLevel checkLev
     // In case not initialized!
     init();
 
-    m_checkIntervalSec = checkIntervalSec > 0 ? checkIntervalSec : 1;
+    m_checkIntervalSec = checkIntervalSec > 0 ? checkIntervalSec : 60;
     m_checkLevel = checkLevel;
     
     if (m_taskHandle == nullptr) {
@@ -131,12 +135,12 @@ void EmWiFi::connect(const char* ssid, const char* password, EmDuration waitTime
     // In case not initialized!
     init();
 
-    logDebug<100>("EmWiFi", "Connecting to '%s'...", ssid);
+    logInfo<100>("EmWiFi", "Connecting to '%s'...", ssid);
 
     // Need to disconnect first?
     if (EmWiFi::isConnected()) {
         esp_wifi_disconnect();
-        logDebug("EmWiFi", "Disconnecting...");
+        logInfo("EmWiFi", "Disconnecting...");
         EmTimeout disconnectionTimeout(1000);
         while (EmWiFi::isConnected() && disconnectionTimeout.isNotExpired()) {
             tDelay(20, true); 
@@ -166,19 +170,18 @@ void EmWiFi::disconnect() {
 
 void EmWiFi::eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        logDebug("EmWiFi", "Disconnected!");
+        logInfo("EmWiFi", "Disconnected!");
         m_connected = false;
         EmWiFi::raiseEvent_(EmWiFiEventType::disconnected);
-        // Notify the connection loop to check for another AP immediately
-        xTaskNotifyGive(EmWiFi::m_taskHandle); 
+        EmWiFi::startApConnectionLoop_();
     } else
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
-        logDebug("EmWiFi", "Connected!");
+        logInfo("EmWiFi", "Connected!");
         // Wait for IP_EVENT_STA_GOT_IP to set m_connected = true
         m_connected = false; 
     } else
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        logDebug("EmWiFi", "Got IP!");
+        logInfo("EmWiFi", "Got IP!");
         // Check if this AP has internet connection
         EmWiFiCredential* pCurrentCredential = nullptr;
         if (EmWiFi::getCurrentCredential_(pCurrentCredential)) {
@@ -224,48 +227,61 @@ bool EmWiFi::getBestNetwork_(EmWiFiCredential& bestNetwork) {
     wifi_ap_record_t scannedAp;
     for (int i = 0; i < scanResult; i++) {
         if (esp_wifi_scan_get_ap_record(&scannedAp) == ESP_OK) {
-            logDebug<100>("EmWiFi", "Found '%s' network [%d]", 
+            logInfo<100>("EmWiFi", "Found '%s' network [%d]", 
                           scannedAp.ssid, 
                           (int)scannedAp.rssi);
             EmMutexLock lock(m_networkMutex);
             for (auto& _network : m_networks) {
                 if (_network.isConnectable() &&
                     _network.ssid.equals(reinterpret_cast<char*>(scannedAp.ssid))) {
-                    if (scannedAp.rssi > highestRssi) {
+                    // Check the credential 'keep me' threshold, if any is defined
+                    bool keepMe = _network.keepMe(scannedAp.rssi);
+                    if (keepMe || scannedAp.rssi > highestRssi) {
                         highestRssi = scannedAp.rssi;
                         bestNetwork.ssid.set(_network.ssid);
                         bestNetwork.password.set(_network.password);
                         networkFound = true;
+                        if (keepMe) {
+                            logInfo<100>("EmWiFi", "Found a 'keep me' network: '%s'", 
+                                          bestNetwork.ssid.c_str());
+                            break; // No need to check other networks
+                        }
                     }
                 }
             }
         }
     }
     if (networkFound) {
-        logDebug<100>("EmWiFi", "Best network: '%s'", bestNetwork.ssid.c_str());
+        logInfo<100>("EmWiFi", "Best network: '%s'", bestNetwork.ssid.c_str());
     }
     esp_wifi_clear_ap_list();
     raiseEvent_(EmWiFiEventType::scanEnd);
     return networkFound;
 }
 
-void EmWiFi::wifiTaskCore_(void* pvParameters) {
+void EmWiFi::wifiTaskCore_(void*) {
     // Endless loop until task is killed
     while (true) {
-        if (!EmWiFi::m_networks.empty() &&                    // Any user defined AP
-            (EmWiFi::isNotConnected() ||                      // Is WiFi disconnected
+        if (!EmWiFi::m_networks.empty() &&                      // Any user defined AP
+            (EmWiFi::isNotConnected() ||                        // Is WiFi disconnected
+             EmWiFi::hasNoInternetConnection() ||               // No internet connection
              EmWiFi::getWiFiLevel() <= EmWiFi::m_checkLevel)) { // Is WiFi level poor
             // Clear current network ssid if disconnected
             if (EmWiFi::isNotConnected()) {
                 EmWiFi::clearCurrentCredential_();
             }
-            // Get the best user defined AP if any is found
-            EmWiFiCredential bestNetwork;
-            if (EmWiFi::getBestNetwork_(bestNetwork) &&      // Any network found
-                !EmWiFi::isCurrentCredential_(bestNetwork)) { // Different than this one
-                EmWiFi::connect(bestNetwork.ssid.c_str(), 
-                              bestNetwork.password.c_str(), 
-                              EmDuration(0,0,10));  // Lets wait 10 seconds
+            // Check the current credential "keep me" threshold, if any is defined
+            EmWiFiCredential* pCurrentCredential = nullptr;
+            if (!EmWiFi::getCurrentCredential_(pCurrentCredential) || 
+                !pCurrentCredential->keepMe()) {
+                // Get the best user defined AP if any is found
+                EmWiFiCredential bestNetwork;
+                if (EmWiFi::getBestNetwork_(bestNetwork) &&      // Any network found
+                    !EmWiFi::isCurrentCredential_(bestNetwork)) { // Different than this one
+                    EmWiFi::connect(bestNetwork.ssid.c_str(), 
+                                    bestNetwork.password.c_str(), 
+                                    EmDuration(0,0,10));  // Lets wait 10 seconds
+                }
             }
         }
         // Wait timeout or event notification to check again

@@ -139,7 +139,7 @@ private:
         }
     }
     
-    static EmWiFiEventResult wifiEventCallback_(void* userArg, EmWiFiEventType event);
+    static void wifiEventCallback_(void* userArg, EmWiFiEventType event);
     
     // Member vars
     inline static ts_bool s_isStarted = false;

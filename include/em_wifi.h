@@ -4,15 +4,18 @@
 #include <atomic>
 #include <vector>
 #include <algorithm>
+#include <type_traits>
 
 #include "esp_wifi.h"
 
 #include "em_log.h"
+#include "em_net.h"
 #include "em_string.h"
 #include "em_timeout.h"
 #include "em_duration.h"
 #include "em_threading.h"
-#include "em_net.h"
+#include "em_json_reader.h"
+#include "em_json_writer.h"
 
 
 enum class EmWiFiLevel: uint8_t {
@@ -45,39 +48,42 @@ inline const char* getWiFiLevelName(EmWiFiLevel level) {
     return "Unknown";
 }
 
-// WiFi credential structure.
+// Limit of user defined APs 
+#define WIFI_MAX_AP_CREDENTIALS 20
+
+// WiFi Access Point Credential structure.
 // The optional 'keepMeThreshold' is used to determine if the current connection 
 // should be kept or if the system should try to connect to another APs.
 // The use-case (which is mine real one) is when some APs might not have weak/intermittent 
 // signal but others are connection with few data/moth plan (e.g. IoT SIMs).
 // Setting it to 'EmWiFiLevel::notConnected' will always try to connect to another AP.
 // The 'noInternetFreezeTimeout' is used to avoid trying to connect to an AP that has no internet connection.
-struct EmWiFiCredential {
-    EmWiFiCredential() {}
-    EmWiFiCredential(const char* ssid, 
-                     const char* pwd)
+struct EmWiFiApCredential {
+    EmWiFiApCredential() {}
+    EmWiFiApCredential(const char* ssid, 
+                       const char* pwd)
      : ssid(ssid), password(pwd) {}
-    EmWiFiCredential(const char* ssid, 
-                     const char* pwd,
-                     EmWiFiLevel keepMeThreshold)
+    EmWiFiApCredential(const char* ssid, 
+                       const char* pwd,
+                       EmWiFiLevel keepMeThreshold)
      : ssid(ssid), password(pwd), 
        keepMeThreshold(keepMeThreshold) {}
-    EmWiFiCredential(const char* ssid, 
-                     const char* pwd,
-                     EmWiFiLevel keepMeThreshold,
-                     EmDuration noInternetFreeze)
+    EmWiFiApCredential(const char* ssid, 
+                       const char* pwd,
+                       EmWiFiLevel keepMeThreshold,
+                       EmDuration noInternetFreeze)
      : ssid(ssid), password(pwd), 
        keepMeThreshold(keepMeThreshold), 
        noInternetFreezeTimeout(noInternetFreeze) {}
 
-    EmWiFiCredential(const EmWiFiCredential& other) {
+    EmWiFiApCredential(const EmWiFiApCredential& other) {
         ssid.set(other.ssid);
         password.set(other.password);
         keepMeThreshold = other.keepMeThreshold;
         noInternetFreezeTimeout = other.noInternetFreezeTimeout;
     }
     
-    EmWiFiCredential& operator=(const EmWiFiCredential& other) {
+    EmWiFiApCredential& operator=(const EmWiFiApCredential& other) {
         ssid.set(other.ssid); 
         password.set(other.password);
         keepMeThreshold = other.keepMeThreshold;
@@ -104,6 +110,10 @@ struct EmWiFiCredential {
     }
 
     bool checkInternetConnection(EmNetInternetCheckType checkType);
+    bool setInternetConnection(bool hasInternetConnection);
+
+    void toJson(EmJsonWriter& apsJson) const;
+    bool fromJson(const EmJsonDictReader& apsJson);
 
     EmStringS ssid;
     EmStringS password;
@@ -114,13 +124,13 @@ struct EmWiFiCredential {
     EmTimeout noInternetFreezeTimeout = EmTimeout(EmDuration(0, 5, 0), true); // 5 minutes, elapsed
 };
 
-
+              
 // WiFi event types
 enum class EmWiFiEventType: uint8_t {
     connected = 0,
     disconnected = 1,
     scanBegin = 2,
-    scanEnd = 2,
+    scanEnd = 3,
 };
 
 // WiFi Power Save mode
@@ -130,12 +140,6 @@ enum class EmWiFiPsMode: uint8_t {
     max = WIFI_PS_MAX_MODEM,
 };    
 
-// WiFi event callback result
-enum class EmWiFiEventResult: uint8_t {
-    none = 0,
-    removeHandler = 1
-};
-
 // WiFi antenna type (if supported!)
 enum class EmWiFiAntennaType: uint8_t {
     internal = 0,
@@ -143,18 +147,38 @@ enum class EmWiFiAntennaType: uint8_t {
 };
 
 // WiFi event callback prototype
-typedef EmWiFiEventResult (*EmWiFiEventCallback)(void* userArg, EmWiFiEventType type);
+// NOTE:
+// Call 'setMarkedForRemoval' within the call back if you want to remove the handler.
+typedef void (*EmWiFiEventCallback)(void* userArg, EmWiFiEventType type);
 
-// WiFi event data                                    
+// WiFi event handler
 struct EmWiFiEventHandler {
     EmWiFiEventHandler(EmWiFiEventCallback callback, void* userArg)
-     : callback(callback), userArg(userArg) {}
+     : callback(callback), userArg(userArg), 
+       m_id(++m_nextHandlerId), m_markedForRemoval(false) {}
 
     EmWiFiEventCallback callback;
-    void* userArg;       
+    void* userArg;
+
+    uint32_t id() const { return m_id; }
+
+    void setMarkedForRemoval() {
+        m_markedForRemoval = true;
+    }
+
+    bool markedForRemoval() const {
+        return m_markedForRemoval;
+    }
+
+protected:
+    uint32_t m_id;
+    bool m_markedForRemoval;
+    static std::atomic<uint32_t> m_nextHandlerId;
 };
 
+
 // NOTE:
+// -----
 // Define 'EM_XIAO_C6' in case you're using a 'Seeed XIAO C6' board
 // in order to use 'switchAntenna' method
 
@@ -175,32 +199,57 @@ public:
 
 
     // Add a new network configuration to the AP list.
-    // Max 128 APs
-    static bool addAP(const char* ssid, const char* passphrase);
+    static bool addAP(const EmWiFiApCredential& ap);
+    static bool addAP(const char* ssid, 
+                      const char* pwd,
+                      EmWiFiLevel keepMeThreshold = EmWiFiLevel::notConnected, // No threshold
+                      EmDuration noInternetFreeze = EmDuration(0, 5, 0)) {     // 5 minutes timeout
+        return addAP(EmWiFiApCredential(ssid, pwd, keepMeThreshold, noInternetFreeze));
+    }
+
     
     // Resets the defined APs
     static void resetApPool() {
         EmMutexLock lock(m_networkMutex);
         m_networks.clear();
         m_currentSsid.clear();
-        m_pCurrentCredential = nullptr;
     }
     
     // Returns the number of defined APs
     static int8_t getApCount() {
-        // No need to block this networks read operation
+        EmMutexLock lock(m_networkMutex);
         return static_cast<int8_t>(m_networks.size());
     }
 
     // Add a new event handler to the WiFi object.
-    // NOTE: keep the event handler callback execution fast, since it blocks other event handlers!
+    // NOTES:
+    //  - Call 'setMarkedForRemoval' within the call back if you want to remove
+    //    the handler within the event callback.
+    //  - Keep the event handler callback execution fast, since it blocks other event handlers!
     static void addEventHandler(EmWiFiEventHandler handler) {
         EmMutexLock lock(m_eventsMutex);
         m_eventHandlers.push_back(handler);
     }
 
+    // Removes an existing event handler from the WiFi object.
+    static void removeEventHandler(const EmWiFiEventHandler& handler) {
+        removeEventHandler(handler.id());
+    }
+    static void removeEventHandler(uint32_t id) {
+        EmMutexLock lock(m_eventsMutex);
+        m_eventHandlers.erase(
+            std::remove_if(
+                m_eventHandlers.begin(),
+                m_eventHandlers.end(),
+                [id](const EmWiFiEventHandler& h)
+                {
+                    return h.id() == id;
+                }),
+            m_eventHandlers.end());
+    }
+
     // Clears the event handlers pool
-    static void clearEventHandlers(EmWiFiEventHandler handler) {
+    static void clearEventHandlers() {
         EmMutexLock lock(m_eventsMutex);
         m_eventHandlers.clear();
     }
@@ -217,7 +266,7 @@ public:
     // Connects to an Access Point
     static void connect(const char* ssid, 
                         const char* password, 
-                        EmDuration waitTime = EmDuration(3000));
+                        EmDuration waitTime = EmDuration(1000));
     
     // Disconnects from current Access Point 
     static void disconnect();
@@ -287,54 +336,106 @@ m_hasInternetConnection ? "" : " NO");
     }
     
 protected:
-    static bool getBestNetwork_(EmWiFiCredential& bestNetwork);
+    static bool getBestNetwork_(EmWiFiApCredential& bestNetwork);
     static void startApConnectionLoop_() {
         // Notify the connection loop to check for another AP immediately
         xTaskNotifyGive(EmWiFi::m_taskHandle); 
     }
-    static void clearCurrentCredential_() {
+    static void clearCurrentSsid_() {
         EmMutexLock lock(m_networkMutex);
-        m_pCurrentCredential = nullptr;
         m_currentSsid.clear();
     }
-    static void setCurrentCredential_(EmWiFiCredential& credential) {
-        EmMutexLock lock(m_networkMutex);
-        m_pCurrentCredential = &credential;
-        m_currentSsid.set(credential.ssid);
-    }
-    static bool getCurrentCredential_(EmWiFiCredential*& credential) {
-        EmMutexLock lock(m_networkMutex);
-        credential = m_pCurrentCredential;
-        return credential != nullptr;
-    }
-    static bool isCurrentCredential_(const EmWiFiCredential& credential) {
-        EmMutexLock lock(m_networkMutex);
-        return m_pCurrentCredential == &credential;
-    }
-
-    static bool getCurrentSsid_(EmStringBase& ssid) {
-        EmMutexLock lock(m_networkMutex);
-        if (m_currentSsid.isNotEmpty()) {
-            ssid.set(m_currentSsid);
-            return true;
-        }
-        return false;
+    static void setCurrentSsid_(const EmStringBase& ssid) {
+        setCurrentSsid_(ssid.c_str());
     }
     static void setCurrentSsid_(const char* ssid) {
         EmMutexLock lock(m_networkMutex);
         m_currentSsid.set(ssid);
     }
+    static bool getCurrentSsid_(EmStringBase& ssid) {
+        EmMutexLock lock(m_networkMutex);
+        ssid.set(m_currentSsid);
+        return ssid.isNotEmpty();
+    }
+    static bool isCurrentSsid_(const EmStringBase& ssid) {
+        return isCurrentSsid_(ssid.c_str());
+    }
+    static bool isCurrentSsid_(const char* ssid) {
+        EmMutexLock lock(m_networkMutex);
+        return m_currentSsid == ssid;
+    }
+    static bool hasCurrentSsid_() {
+        EmMutexLock lock(m_networkMutex);
+        return m_currentSsid.isNotEmpty();
+    }
+
+
+    static bool canKeepCurrentCredential_() {
+        if (!hasCurrentSsid_()) {
+            return false;
+        }
+        int8_t rssi = getRssi();
+        EmMutexLock lock(m_networkMutex);
+        for (const auto& credential : m_networks) {
+            if (credential.ssid == m_currentSsid) {
+                return credential.keepMe(rssi);
+            }
+        }
+        return false;
+    }
+
+    static bool checkCurrentCredentialInternetConnection_() {
+        if (!hasCurrentSsid_()) {
+            return false;
+        }
+        
+        // We still not mark as connected so we AVOID checking; EmWiFi::isConnected()!
+        bool hasInternetConnection = EmNet::checkInternetConnection(m_internetCheckType);
+
+        EmMutexLock lock(m_networkMutex);
+        for (auto& credential : m_networks) {
+            if (credential.ssid == m_currentSsid) {
+                return credential.setInternetConnection(hasInternetConnection);
+            }
+        }
+        return false;
+    }
+
+    static bool hasNetworks_() {
+        EmMutexLock lock(m_networkMutex);
+        return !m_networks.empty();
+    }
 
     static void raiseEvent_(EmWiFiEventType type) {
+        // To avoid locking event callback we go by indexes which might not be 
+        // a 100% user events safe method but it avoid deadlock in case user
+        // calls 'addEventHandler' or 'removeEventHandler' within the event handler.
+        size_t index=0;
+        for (;;)
+        {
+            EmWiFiEventCallback cb;
+            void* arg;
+            {
+                EmMutexLock lock(m_eventsMutex);
+                if (index >= m_eventHandlers.size())
+                    break;
+                cb = m_eventHandlers[index].callback;
+                arg = m_eventHandlers[index].userArg;
+            }
+            cb(arg, type);
+            ++index;
+        }
+        // Remove user marked event handler
         EmMutexLock lock(m_eventsMutex);
         m_eventHandlers.erase(
-            std::remove_if(m_eventHandlers.begin(), 
-                           m_eventHandlers.end(), 
-                           [type](EmWiFiEventHandler handler) {
-                return handler.callback(handler.userArg, type) == EmWiFiEventResult::removeHandler;
-            }), 
-            m_eventHandlers.end()
-        );        
+            std::remove_if(
+                m_eventHandlers.begin(),
+                m_eventHandlers.end(),
+                [](const EmWiFiEventHandler& h)
+                {
+                    return h.markedForRemoval();
+                }),
+            m_eventHandlers.end());        
     }
 
     static void eventHandler_(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
@@ -343,10 +444,9 @@ protected:
     inline static EmMutex m_initMutex;
     inline static esp_netif_t* m_netif = nullptr;
     inline static EmStringS m_currentSsid; // Needed in case of direct user connect(...) call!
-    inline static EmWiFiCredential* m_pCurrentCredential = nullptr;
 
     inline static EmMutex m_networkMutex;
-    inline static std::vector<EmWiFiCredential> m_networks;
+    inline static std::vector<EmWiFiApCredential> m_networks;
 
     inline static EmMutex m_eventsMutex;
     inline static std::vector<EmWiFiEventHandler> m_eventHandlers;
@@ -360,7 +460,7 @@ protected:
     inline static EmNetInternetCheckType m_internetCheckType = EmNetInternetCheckType::udp;
 };
 
-inline bool EmWiFiCredential::keepMe() const { return keepMe(EmWiFi::getRssi()); }
+inline bool EmWiFiApCredential::keepMe() const { return keepMe(EmWiFi::getRssi()); }
 
 
 #endif

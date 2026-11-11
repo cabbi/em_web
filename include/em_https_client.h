@@ -69,10 +69,11 @@ public:
                                   const char* cmd,
                                   const char* params) {
         EmStringXL request;
-        EmJsonDictWriter reqWriter(request);
+        EmJsonWriter reqWriter(request);
+        reqWriter.beginObject();
         reqWriter.addString("cmd", cmd);
         reqWriter.addObject("params", params);
-		reqWriter.end();
+		reqWriter.finalize();
         bool gotAllResponse = false;
         return postJson(endpoint, request.c_str(), nullptr, 0, gotAllResponse);
     }
@@ -92,10 +93,11 @@ public:
                                   size_t responseSize, 
                                   bool& gotAllResponse) {
         EmStringXL request;
-        EmJsonDictWriter reqWriter(request);
+        EmJsonWriter reqWriter(request);
+        reqWriter.beginObject();
         reqWriter.addString("cmd", cmd);
         reqWriter.addObject("params", params);
-		reqWriter.end();
+		reqWriter.finalize();
         return postJson(endpoint, request.c_str(), response, responseSize, gotAllResponse);
     }
 

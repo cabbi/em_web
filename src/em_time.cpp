@@ -36,14 +36,12 @@ bool EmTime::begin(const char* tz,
     return true;
 }
 
-EmWiFiEventResult EmTime::wifiEventCallback_(void* userArg, EmWiFiEventType event) {
+void EmTime::wifiEventCallback_(void* userArg, EmWiFiEventType event) {
     if (event == EmWiFiEventType::connected) {
         start_();
         // No notifications needed anymore
-        return EmWiFiEventResult::removeHandler;
+        s_wifiEventHandler.setMarkedForRemoval();
     }
-    // Waiting the WiFi connection callback
-    return EmWiFiEventResult::none;
 }
 
 bool EmTime::setup_(const char* tz,

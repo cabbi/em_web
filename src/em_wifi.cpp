@@ -34,19 +34,32 @@ logInfo<100>("EmWiFi", "AP '%s' has NO internet connection!", ssid.c_str()); // 
     return false;
 }
 
-void EmWiFiApCredential::toJson(EmJsonDictWriter& apsJson) const {
+void EmWiFiApCredential::toJson(EmJsonWriter& apsJson) const {
     // Starts the new AP dict (lets keep short dict keys!)
-    apsJson.beginDict();
+    apsJson.beginObject();
     apsJson.addString("ssid", ssid);
     apsJson.addString("pwd", password);
     apsJson.addInt("keep", (int)keepMeThreshold);
     apsJson.addInt("noInt", (int)noInternetFreezeTimeout.getDuration().seconds());
-    apsJson.endDict();
+    apsJson.end(); // We MUST not finalize this json!
 }
 
-bool EmWiFiApCredential::fromJson(const EmJsonDictReader& apsJson) {
-    // TODO CABBI
-    return false;
+bool EmWiFiApCredential::fromJson(const EmJsonReader& apsJson, const EmJsonInnerObj& scope) {
+    if (!apsJson.getString("ssid", ssid, scope)) {
+        return false;
+    }
+    if (!apsJson.getString("pwd", password, scope)) {
+        return false;
+    }
+    if (!apsJson.getInt("keep", keepMeThreshold)) {
+        return false;
+    }
+    uint32_t secs;
+    if (!apsJson.getInt("noInt", secs)) {
+        return false;
+    }
+    noInternetFreezeTimeout.setTimeout(secs*1000, true);
+    return true;
 }
 
 

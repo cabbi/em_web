@@ -113,7 +113,7 @@ struct EmWiFiApCredential {
     bool setInternetConnection(bool hasInternetConnection);
 
     void toJson(EmJsonWriter& apsJson) const;
-    bool fromJson(const EmJsonDictReader& apsJson);
+    bool fromJson(const EmJsonReader& apsJson, const EmJsonInnerObj& scope = EmJsonInnerObj());
 
     EmStringS ssid;
     EmStringS password;

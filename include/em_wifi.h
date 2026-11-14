@@ -74,7 +74,7 @@ struct EmWiFiApCredential {
                        EmDuration noInternetFreeze)
      : ssid(ssid), password(pwd), 
        keepMeThreshold(keepMeThreshold), 
-       noInternetFreezeTimeout(noInternetFreeze) {}
+       noInternetFreezeTimeout(noInternetFreeze, true) {}
 
     EmWiFiApCredential(const EmWiFiApCredential& other) {
         ssid.set(other.ssid);
@@ -292,11 +292,6 @@ public:
         if (m_internetCheckTimeout.isExpired(true)) {
             m_hasInternetConnection = EmNet::checkInternetConnection(m_internetCheckType);
         }
-EmStringS ssid; // CABBI 
-getCurrentSsid_(ssid);
-logInfo<100>("EmWiFi", "AP '%s' has%s internet connection!", 
-ssid.c_str(),
-m_hasInternetConnection ? "" : " NO"); 
         return m_hasInternetConnection;
     }
 
